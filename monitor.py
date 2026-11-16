@@ -55,12 +55,12 @@ class Odoo:
             raise RuntimeError(f"No se pudo conectar con Odoo: {exc.reason}") from exc
         return result
 
-    def search_read(self, model, domain, fields, limit=500):
+    def search_read(self, model, domain, fields, limit=500, order="create_date desc"):
         result = self.call(model, "search_read", {
             "domain": domain,
             "fields": fields,
             "limit": limit,
-            "order": "create_date desc",
+            "order": order,
         })
         if not isinstance(result, list):
             raise RuntimeError(f"Respuesta inesperada al consultar {model}.")
@@ -248,7 +248,7 @@ def mail_notification_diagnostic(odoo, start_utc, end_utc):
         )
         fields = ["id", "mail_message_id"] + [name for name in candidates if name in meta]
         records = odoo.search_read(
-            "mail.notification", [["mail_message_id", "in", outgoing_ids]], fields, limit=2000
+            "mail.notification", [["mail_message_id", "in", outgoing_ids]], fields, limit=2000, order="id desc"
         )
         lines.append(f"• Correos salientes asociados: {len(outgoing_ids)}")
         lines.append(f"• Notificaciones asociadas a esos correos: {len(records)}")
