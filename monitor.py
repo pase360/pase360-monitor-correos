@@ -211,8 +211,8 @@ def mail_message_diagnostic(odoo, start_utc, end_utc):
 
 
 
-def mail_notification_diagnostic(odoo, mail_records):
-    """Cuenta estados por correo saliente usando primero el vínculo directo mail_mail_id."""
+def mail_notification_diagnostic(odoo, mail_records, start_utc, end_utc):
+    """Investiga vínculos mail.mail -> mail.message -> notification_ids sin datos personales."""
     lines = ["", "📨 DIAGNÓSTICO DE ENTREGA DE CORREO (mail.notification)"]
     try:
         meta = odoo.fields_get("mail.notification")
@@ -222,6 +222,41 @@ def mail_notification_diagnostic(odoo, mail_records):
         mail_ids = [row["id"] for row in mail_records if row.get("id")]
         if not mail_ids:
             return lines + ["• No hay correos Pase 360 conservados para consultar."]
+
+        mail_meta = odoo.fields_get("mail.mail")
+        mail_link_count = sum(
+            1 for row in mail_records
+            if row.get("mail_message_id") not in (None, False, [], ())
+        )
+        lines.append(f"• Correos Pase 360 consultados: {len(mail_ids)}")
+        lines.append(f"• Correos con vínculo mail_message_id informado: {mail_link_count}")
+
+        msg_meta = odoo.fields_get("mail.message")
+        msg_fields = ["id"]
+        if "message_type" in msg_meta:
+            msg_fields.append("message_type")
+        if "notification_ids" in msg_meta:
+            msg_fields.append("notification_ids")
+        messages = odoo.search_read(
+            "mail.message", date_domain(start_utc, end_utc), msg_fields, limit=1000
+        )
+        outgoing = [
+            row for row in messages
+            if row.get("message_type") == "email_outgoing"
+        ] if "message_type" in msg_fields else []
+        lines.append(f"• Mensajes email_outgoing del día: {len(outgoing)}")
+
+        notification_ids = set()
+        if "notification_ids" in msg_fields:
+            for row in outgoing:
+                value = row.get("notification_ids") or []
+                if isinstance(value, list):
+                    for item in value:
+                        if isinstance(item, int):
+                            notification_ids.add(item)
+                        elif isinstance(item, (list, tuple)) and item and isinstance(item[0], int):
+                            notification_ids.add(item[0])
+            lines.append(f"• IDs de notificación enlazados desde mail.message: {len(notification_ids)}")
 
         candidates = (
             "notification_type", "notification_status", "failure_type",
@@ -233,17 +268,21 @@ def mail_notification_diagnostic(odoo, mail_records):
 
         records = []
         relation_used = None
-
-        # Odoo 19 dispone de mail_mail_id, vínculo directo con mail.mail.
-        if "mail_mail_id" in meta:
+        if notification_ids:
             records = odoo.search_read(
-                "mail.notification",
-                [["mail_mail_id", "in", mail_ids]],
+                "mail.notification", [["id", "in", sorted(notification_ids)]],
                 fields, limit=2000, order="id desc"
             )
-            relation_used = "mail_mail_id"
+            relation_used = "mail.message.notification_ids"
 
-        # Respaldo: relacionar por mail_message_id si el vínculo directo no devuelve filas.
+        if not records and "mail_mail_id" in meta:
+            records = odoo.search_read(
+                "mail.notification", [["mail_mail_id", "in", mail_ids]],
+                fields, limit=2000, order="id desc"
+            )
+            if records:
+                relation_used = "mail_mail_id"
+
         if not records and "mail_message_id" in meta:
             message_ids = []
             for row in mail_records:
@@ -258,17 +297,14 @@ def mail_notification_diagnostic(odoo, mail_records):
                     [["mail_message_id", "in", message_ids]],
                     fields, limit=2000, order="id desc"
                 )
-                relation_used = "mail_message_id (respaldo)"
+                if records:
+                    relation_used = "mail_message_id"
 
-        lines.append(f"• Correos Pase 360 consultados: {len(mail_ids)}")
         lines.append(f"• Notificaciones relacionadas encontradas: {len(records)}")
-        lines.append(f"• Vínculo utilizado: {relation_used or 'sin vínculo disponible'}")
+        lines.append(f"• Vínculo utilizado: {relation_used or 'ninguno; no se encontraron relaciones'}")
 
         if "notification_type" in meta and records:
-            email_records = [
-                row for row in records
-                if row.get("notification_type") == "email"
-            ]
+            email_records = [r for r in records if r.get("notification_type") == "email"]
             lines.append(f"• Notificaciones de tipo email: {len(email_records)}")
         else:
             email_records = records
@@ -277,27 +313,22 @@ def mail_notification_diagnostic(odoo, mail_records):
             if field not in meta:
                 continue
             selection = meta[field].get("selection") or []
-            labels = {str(key): str(label) for key, label in selection}
-            counts = Counter(
-                str(row.get(field) or "sin dato") for row in email_records
-            )
-            title = "Estado de entrega registrado por Odoo" if field == "notification_status" else "Tipo de fallo registrado"
+            labels = {str(k): str(v) for k, v in selection}
+            counts = Counter(str(r.get(field) or "sin dato") for r in email_records)
+            title = "Estado de notificación" if field == "notification_status" else "Tipo de fallo"
             lines.append("• " + title + ": " + (
-                "; ".join(
-                    f"{labels.get(key, key)}: {amount}"
-                    for key, amount in sorted(counts.items())
-                ) if counts else "sin registros"
+                "; ".join(f"{labels.get(k,k)}: {v}" for k,v in sorted(counts.items()))
+                if counts else "sin registros"
             ))
 
         if "read_date" in meta:
-            read_count = sum(1 for row in email_records if row.get("read_date"))
+            read_count = sum(1 for r in email_records if r.get("read_date"))
             lines.append(f"• Notificaciones con read_date: {read_count}")
-            lines.append("  Este campo no prueba que el cliente haya abierto el correo; puede reflejar lectura interna en Odoo.")
-
-        lines.append("• 'Entregado' en Odoo no equivale a confirmación de llegada a la bandeja del cliente.")
+            lines.append("  No equivale a apertura del email por el cliente.")
+        lines.append("• La confirmación de entrega a bandeja y las aperturas requieren eventos del servidor o seguimiento de correo.")
         lines.append("No se consultaron ni mostraron destinatarios, direcciones ni contenido.")
     except Exception as exc:
-        lines.append(f"• mail.notification: no disponible o sin permiso de lectura ({str(exc)[:350]}).")
+        lines.append(f"• Diagnóstico de mail.notification incompleto: {str(exc)[:350]}.")
     return lines
 
 
@@ -410,7 +441,7 @@ def main():
         lines += ["Errores de correo:", *failures, ""]
 
     lines.extend(mail_message_diagnostic(odoo, start_utc, end_utc))
-    lines.extend(mail_notification_diagnostic(odoo, mail_records))
+    lines.extend(mail_notification_diagnostic(odoo, mail_records, start_utc, end_utc))
     lines.extend(tracking_diagnostic(odoo))
     lines.append("")
     lines.extend(whatsapp_report(odoo, start_utc, end_utc))
