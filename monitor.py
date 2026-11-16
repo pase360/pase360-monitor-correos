@@ -148,8 +148,20 @@ def whatsapp_report(odoo, start_utc, end_utc):
         ]
         if not records:
             lines.append("No se encontraron mensajes de ayer en whatsapp.message.")
+        traducciones = {
+            "delivered": "Entregado",
+            "failed": "Fallido",
+            "read": "Leído",
+            "received": "Recibido",
+            "sent": "Enviado",
+            "pending": "Pendiente",
+            "accepted": "Aceptado",
+            "queued": "En cola",
+        }
         for key, amount in sorted(counts.items()):
-            label = labels.get(key, key)
+            original = labels.get(key, key)
+            label = traducciones.get(str(key).lower(),
+                     traducciones.get(str(original).lower(), str(original)))
             lines.append(f"{label}: {amount}")
         lines.append("Estados obtenidos de los registros de Odoo; no se muestran teléfonos ni textos.")
         return lines
@@ -204,16 +216,23 @@ def main():
         "📬 PASE 360 | CONTROL DIARIO",
         f"Día informado: {yesterday_start.strftime('%d/%m/%Y')}",
         "",
-        "✉️ CORREOS",
-        f"Registros con asunto Pase 360: {len(mail_records)}",
-        f"Enviados (estado Odoo): {mail_counts['sent']}",
-        f"Pendientes: {mail_counts['outgoing']}",
-        f"Fallidos: {mail_counts['exception']}",
+        "✉️ ESTADO DE LOS CORREOS",
+        f"Total de registros de correo Pase 360: {len(mail_records)}",
+        f"Enviados por Odoo: {mail_counts['sent']}",
+        f"Pendientes de envío: {mail_counts['outgoing']}",
+        f"Con error de envío: {mail_counts['exception']}",
         f"Cancelados: {mail_counts['cancel']}",
         f"Otros estados: {mail_counts['other']}",
         "",
-        "⚠️ El estado enviado no confirma entrega ni apertura del correo.",
-        "Las aperturas solo se informarán si la automatización ya registra seguimiento compatible.",
+        "Qué significa cada estado:",
+        "• Enviados por Odoo: Odoo completó el envío al servidor de correo; no confirma llegada a la bandeja.",
+        "• Pendientes: Odoo todavía los tiene en cola de envío.",
+        "• Con error: Odoo registró un problema al intentar enviarlos.",
+        "• Cancelados: el envío fue cancelado.",
+        "• Otros: estado distinto de los anteriores.",
+        "",
+        "Importante: este informe todavía no verifica rebotes en Gmail ni aperturas reales.",
+        "Tampoco puede confirmar que una persona haya leído el correo.",
         "",
     ]
     if failures:
