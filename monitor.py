@@ -173,6 +173,45 @@ def whatsapp_report(odoo, start_utc, end_utc):
         ]
 
 
+def tracking_diagnostic(odoo):
+    """Inspecciona modelos de seguimiento sin leer destinatarios ni contenido."""
+    candidates = (
+        "mailing.trace",
+        "mail.tracking.email",
+        "mail.tracking.event",
+    )
+    lines = ["", "🔎 DIAGNÓSTICO DE SEGUIMIENTO DE CORREO"]
+    interesting = (
+        "state", "status", "trace_status", "open", "opened",
+        "open_datetime", "sent_datetime", "delivered", "bounce",
+        "mailing_id", "mail_message_id", "model", "res_id",
+        "create_date", "email"
+    )
+    for model in candidates:
+        try:
+            meta = odoo.fields_get(model)
+            if not isinstance(meta, dict) or not meta:
+                lines.append(f"• {model}: modelo sin campos visibles.")
+                continue
+            found = [
+                name for name in meta
+                if any(term in name.lower() for term in interesting)
+            ]
+            lines.append(f"• {model}: disponible; campos relevantes: "
+                         + (", ".join(found[:25]) if found else "ninguno identificado"))
+            for name in found:
+                selection = meta[name].get("selection")
+                if selection and any(word in name.lower()
+                                     for word in ("state", "status", "trace")):
+                    labels = ", ".join(f"{key}={label}" for key, label in selection)
+                    lines.append(f"  - Valores de {name}: {labels[:350]}")
+        except Exception as exc:
+            detail = str(exc).replace("\\n", " ")[:180]
+            lines.append(f"• {model}: no disponible o sin permiso de lectura ({detail}).")
+    lines.append("Este diagnóstico solo consulta metadatos; no modifica registros.")
+    return lines
+
+
 def main():
     now = datetime.now(TZ)
     today_start = now.replace(hour=0, minute=0, second=0, microsecond=0)
@@ -238,6 +277,8 @@ def main():
     if failures:
         lines += ["Errores de correo:", *failures, ""]
 
+    lines.extend(tracking_diagnostic(odoo))
+    lines.append("")
     lines.extend(whatsapp_report(odoo, start_utc, end_utc))
     lines += [
         "",
