@@ -173,6 +173,43 @@ def whatsapp_report(odoo, start_utc, end_utc):
         ]
 
 
+def mail_message_diagnostic(odoo, start_utc, end_utc):
+    """Cuenta mensajes del chatter sin leer ni mostrar asunto, direcciones o cuerpo."""
+    lines = ["", "🔍 DIAGNÓSTICO DE MENSAJES EN ODOO"]
+    try:
+        meta = odoo.fields_get("mail.message")
+        if not isinstance(meta, dict) or not meta:
+            return lines + ["• mail.message: modelo sin campos visibles."]
+        if "create_date" not in meta:
+            return lines + ["• mail.message: disponible, pero sin create_date para filtrar el día."]
+        fields = ["id"]
+        if "message_type" in meta:
+            fields.append("message_type")
+        records = odoo.search_read(
+            "mail.message", date_domain(start_utc, end_utc), fields, limit=1000
+        )
+        lines.append(f"• Registros mail.message creados ayer: {len(records)}")
+        if "message_type" in fields:
+            counts = Counter(str(row.get("message_type") or "sin_tipo") for row in records)
+            for kind, amount in sorted(counts.items()):
+                lines.append(f"  - Tipo {kind}: {amount}")
+        else:
+            lines.append("• El modelo no expone message_type; no se puede separar correo de otros mensajes.")
+        relevant = [
+            name for name in meta
+            if any(term in name.lower() for term in (
+                "message_type", "email", "mail", "notification", "failure",
+                "date", "model", "res_id"
+            ))
+        ]
+        lines.append("• Campos técnicos relacionados disponibles: " +
+                     (", ".join(relevant[:30]) if relevant else "ninguno identificado"))
+    except Exception as exc:
+        lines.append(f"• mail.message: no se pudo consultar ({str(exc)[:220]}).")
+    lines.append("Solo se cuentan registros; no se leen ni muestran destinatarios ni contenido.")
+    return lines
+
+
 def tracking_diagnostic(odoo):
     """Inspecciona modelos de seguimiento sin leer destinatarios ni contenido."""
     candidates = (
@@ -281,6 +318,7 @@ def main():
     if failures:
         lines += ["Errores de correo:", *failures, ""]
 
+    lines.extend(mail_message_diagnostic(odoo, start_utc, end_utc))
     lines.extend(tracking_diagnostic(odoo))
     lines.append("")
     lines.extend(whatsapp_report(odoo, start_utc, end_utc))
