@@ -143,7 +143,7 @@ def whatsapp_report(odoo, start_utc, end_utc):
 
         lines = [
             "📱 PASE 360 | CONTROL DE WHATSAPP",
-            f"Mensajes registrados ayer: {len(records)}",
+            f"Mensajes registrados ese día: {len(records)}",
             f"Campo de estado leído en Odoo: {status_field}",
         ]
         if not records:
@@ -188,7 +188,7 @@ def mail_message_diagnostic(odoo, start_utc, end_utc):
         records = odoo.search_read(
             "mail.message", date_domain(start_utc, end_utc), fields, limit=1000
         )
-        lines.append(f"• Registros mail.message creados ayer: {len(records)}")
+        lines.append(f"• Registros mail.message creados ese día: {len(records)}")
         if "message_type" in fields:
             counts = Counter(str(row.get("message_type") or "sin_tipo") for row in records)
             for kind, amount in sorted(counts.items()):
@@ -250,11 +250,11 @@ def tracking_diagnostic(odoo):
 
 
 def main():
-    now = datetime.now(TZ)
-    today_start = now.replace(hour=0, minute=0, second=0, microsecond=0)
-    yesterday_start = today_start - timedelta(days=1)
-    start_utc = yesterday_start.astimezone(timezone.utc).strftime("%Y-%m-%d %H:%M:%S")
-    end_utc = today_start.astimezone(timezone.utc).strftime("%Y-%m-%d %H:%M:%S")
+    # Fecha fija de investigación: últimos correos informados por el usuario.
+    report_date = datetime(2026, 11, 13, tzinfo=TZ)
+    next_date = report_date + timedelta(days=1)
+    start_utc = report_date.astimezone(timezone.utc).strftime("%Y-%m-%d %H:%M:%S")
+    end_utc = next_date.astimezone(timezone.utc).strftime("%Y-%m-%d %H:%M:%S")
 
     odoo = Odoo()
     try:
@@ -292,7 +292,7 @@ def main():
 
     lines = [
         "📬 PASE 360 | CONTROL DIARIO",
-        f"Día informado: {yesterday_start.strftime('%d/%m/%Y')}",
+        f"Día informado: {report_date.strftime('%d/%m/%Y')}",
         "",
         "✉️ ESTADO DE LOS CORREOS",
         f"Registros mail.mail de todos los asuntos (ayer): {len(all_mail_records)}",
