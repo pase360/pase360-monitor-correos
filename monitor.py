@@ -332,6 +332,34 @@ def mail_notification_diagnostic(odoo, mail_records, start_utc, end_utc):
     return lines
 
 
+def mail_server_diagnostic(odoo):
+    """Identifica el servidor saliente sin exponer usuarios, contraseñas ni direcciones."""
+    lines = ["", "🛰️ SERVIDOR DE CORREO SALIENTE"]
+    try:
+        meta = odoo.fields_get("ir.mail_server")
+        if not isinstance(meta, dict) or not meta:
+            return lines + ["• No se pudieron consultar los servidores salientes."]
+        wanted = [name for name in ("id", "name", "smtp_host", "smtp_port", "active", "sequence") if name in meta]
+        if "smtp_host" not in wanted and "name" not in wanted:
+            return lines + ["• El modelo existe, pero no expone el nombre ni el host del servidor."]
+        domain = [["active", "=", True]] if "active" in meta else []
+        rows = odoo.search_read("ir.mail_server", domain, wanted, limit=20, order="sequence asc" if "sequence" in meta else "id asc")
+        if not rows:
+            lines.append("• No se encontraron servidores salientes activos configurados.")
+            lines.append("• Odoo podría estar utilizando su servidor de correo predeterminado.")
+            return lines
+        for i, row in enumerate(rows, 1):
+            name = str(row.get("name") or "Servidor sin nombre")[:80]
+            host = str(row.get("smtp_host") or "host no informado")[:120]
+            port = row.get("smtp_port")
+            lines.append(f"• Servidor {i}: {name}")
+            lines.append(f"  Host: {host}" + (f"; puerto: {port}" if port else ""))
+        lines.append("No se consultaron usuarios, contraseñas ni direcciones de correo.")
+    except Exception as exc:
+        lines.append(f"• No se pudo identificar el servidor saliente ({str(exc)[:300]}).")
+    return lines
+
+
 def tracking_diagnostic(odoo):
     """Inspecciona modelos de seguimiento sin leer destinatarios ni contenido."""
     candidates = (
@@ -442,6 +470,7 @@ def main():
 
     lines.extend(mail_message_diagnostic(odoo, start_utc, end_utc))
     lines.extend(mail_notification_diagnostic(odoo, mail_records, start_utc, end_utc))
+    lines.extend(mail_server_diagnostic(odoo))
     lines.extend(tracking_diagnostic(odoo))
     lines.append("")
     lines.extend(whatsapp_report(odoo, start_utc, end_utc))
