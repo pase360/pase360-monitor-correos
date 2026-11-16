@@ -1,10 +1,11 @@
 #!/usr/bin/env python3
-"""Monitor de solo lectura para los correos de Pase 360 en Odoo 19 (JSON-2)."""
+"""Monitor de solo lectura para correo y WhatsApp de Pase 360 en Odoo 19."""
 import json
 import os
 import sys
 import urllib.request
 import urllib.error
+from collections import Counter
 from datetime import datetime, timedelta, timezone
 from zoneinfo import ZoneInfo
 
@@ -24,22 +25,16 @@ class Odoo:
         self.db = required("ODOO_DB")
         self.key = required("ODOO_API_KEY")
 
-    def search_read(self, model, domain, fields, limit=500):
-        payload = {
-            "domain": domain,
-            "fields": fields,
-            "limit": limit,
-            "order": "create_date desc",
-        }
+    def call(self, model, method, payload):
         data = json.dumps(payload).encode()
         req = urllib.request.Request(
-            f"{self.url}/json/2/{model}/search_read",
+            f"{self.url}/json/2/{model}/{method}",
             data=data,
             headers={
                 "Authorization": f"bearer {self.key}",
                 "X-Odoo-Database": self.db,
                 "Content-Type": "application/json; charset=utf-8",
-                "User-Agent": "Pase360-Mail-Monitor/1.0",
+                "User-Agent": "Pase360-Mail-Monitor/1.1",
             },
             method="POST",
         )
@@ -58,12 +53,23 @@ class Odoo:
             ) from exc
         except urllib.error.URLError as exc:
             raise RuntimeError(f"No se pudo conectar con Odoo: {exc.reason}") from exc
-
-        if not isinstance(result, list):
-            raise RuntimeError(
-                "Odoo devolvió una respuesta inesperada al consultar mail.mail."
-            )
         return result
+
+    def search_read(self, model, domain, fields, limit=500):
+        result = self.call(model, "search_read", {
+            "domain": domain,
+            "fields": fields,
+            "limit": limit,
+            "order": "create_date desc",
+        })
+        if not isinstance(result, list):
+            raise RuntimeError(f"Respuesta inesperada al consultar {model}.")
+        return result
+
+    def fields_get(self, model):
+        return self.call(model, "fields_get", {
+            "attributes": ["string", "type", "selection", "relation"]
+        })
 
 
 def telegram(text):
@@ -91,6 +97,69 @@ def telegram(text):
         raise RuntimeError("Telegram no aceptó el mensaje: " + str(result)[:300])
 
 
+def date_domain(start_utc, end_utc):
+    return [
+        ["create_date", ">=", start_utc],
+        ["create_date", "<", end_utc],
+    ]
+
+
+def whatsapp_report(odoo, start_utc, end_utc):
+    """Descubre el campo de estado real y resume WhatsApp sin exponer destinatarios."""
+    try:
+        meta = odoo.fields_get("whatsapp.message")
+        if not isinstance(meta, dict) or not meta:
+            return [
+                "WhatsApp: Odoo no devolvió los campos del modelo whatsapp.message.",
+                "Se necesita revisar el modelo o los permisos de lectura."
+            ]
+
+        status_field = next(
+            (name for name in ("state", "status") if name in meta),
+            None
+        )
+        date_field = "create_date" if "create_date" in meta else None
+        if not status_field:
+            return [
+                "WhatsApp: se encontró el modelo, pero no el campo de estado esperado.",
+                "Campos técnicos de estado disponibles: "
+                + ", ".join(
+                    name for name, info in meta.items()
+                    if any(word in name.lower() for word in ("state", "status"))
+                )
+            ]
+
+        selected_fields = ["id", status_field]
+        if date_field:
+            selected_fields.append(date_field)
+        domain = date_domain(start_utc, end_utc) if date_field else []
+        records = odoo.search_read(
+            "whatsapp.message", domain, selected_fields, limit=1000
+        )
+
+        selection = meta[status_field].get("selection") or []
+        labels = {str(key): str(label) for key, label in selection}
+        counts = Counter(str(row.get(status_field) or "sin_estado") for row in records)
+
+        lines = [
+            "📱 PASE 360 | CONTROL DE WHATSAPP",
+            f"Mensajes registrados hoy: {len(records)}",
+        ]
+        if not records:
+            lines.append("No se encontraron mensajes para hoy en whatsapp.message.")
+        for key, amount in sorted(counts.items()):
+            label = labels.get(key, key)
+            lines.append(f"{label}: {amount}")
+        lines.append("Estados obtenidos de los registros de Odoo; no se muestran teléfonos ni textos.")
+        return lines
+    except Exception as exc:
+        return [
+            "📱 PASE 360 | CONTROL DE WHATSAPP",
+            "No se pudo consultar whatsapp.message.",
+            f"Diagnóstico: {str(exc)[:700]}"
+        ]
+
+
 def main():
     now = datetime.now(TZ)
     today_start = now.replace(hour=0, minute=0, second=0, microsecond=0)
@@ -100,16 +169,13 @@ def main():
     )
 
     odoo = Odoo()
-    # Consulta exclusivamente de lectura: no crea ni modifica registros.
-    domain = [
-        ["create_date", ">=", start_utc],
-        ["create_date", "<", end_utc],
+    mail_domain = date_domain(start_utc, end_utc) + [
         ["subject", "ilike", "Pase 360"]
     ]
     try:
-        records = odoo.search_read(
+        mail_records = odoo.search_read(
             "mail.mail",
-            domain,
+            mail_domain,
             [
                 "id", "subject", "email_to", "state",
                 "failure_reason", "create_date", "email_from"
@@ -122,34 +188,42 @@ def main():
             "o no estar disponible algún campo. Detalle: " + str(exc)
         ) from exc
 
-    counts = {"outgoing": 0, "sent": 0, "exception": 0, "cancel": 0, "other": 0}
+    mail_counts = {
+        "outgoing": 0, "sent": 0, "exception": 0, "cancel": 0, "other": 0
+    }
     failures = []
-    for rec in records:
+    for rec in mail_records:
         state = rec.get("state") or "other"
-        counts[state if state in counts else "other"] += 1
+        mail_counts[state if state in mail_counts else "other"] += 1
         if state == "exception" and len(failures) < 5:
             failures.append(
-                f"- {rec.get('email_to') or '(sin destinatario)'}: "
-                f"{(rec.get('failure_reason') or 'sin detalle')[:180]}"
+                f"- {(rec.get('failure_reason') or 'sin detalle')[:180]}"
             )
 
     lines = [
-        "📬 PASE 360 | CONTROL DE CORREOS",
+        "📬 PASE 360 | CONTROL DIARIO",
         f"Fecha: {now.strftime('%d/%m/%Y')}",
         "",
-        f"Registros de invitación encontrados hoy: {len(records)}",
-        f"Enviados (estado Odoo): {counts['sent']}",
-        f"Pendientes: {counts['outgoing']}",
-        f"Fallidos: {counts['exception']}",
-        f"Cancelados: {counts['cancel']}",
-        f"Otros estados: {counts['other']}",
+        "✉️ CORREOS",
+        f"Registros con asunto Pase 360: {len(mail_records)}",
+        f"Enviados (estado Odoo): {mail_counts['sent']}",
+        f"Pendientes: {mail_counts['outgoing']}",
+        f"Fallidos: {mail_counts['exception']}",
+        f"Cancelados: {mail_counts['cancel']}",
+        f"Otros estados: {mail_counts['other']}",
         "",
-        "⚠️ 'Enviado' significa que Odoo registró el envío; "
-        "no confirma bandeja de entrada ni lectura.",
-        "La consulta depende de que Odoo conserve los registros mail.mail."
+        "⚠️ El estado enviado no confirma entrega ni apertura del correo.",
+        "Las aperturas solo se informarán si la automatización ya registra seguimiento compatible.",
+        "",
     ]
     if failures:
-        lines += ["", "Errores detectados:", *failures]
+        lines += ["Errores de correo:", *failures, ""]
+
+    lines.extend(whatsapp_report(odoo, start_utc, end_utc))
+    lines += [
+        "",
+        "Informe de solo lectura. No se modificaron mensajes ni automatizaciones."
+    ]
     telegram("\n".join(lines))
 
 
