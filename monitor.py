@@ -210,6 +210,49 @@ def mail_message_diagnostic(odoo, start_utc, end_utc):
     return lines
 
 
+
+def mail_notification_diagnostic(odoo, start_utc, end_utc):
+    """Resume estados de notificación sin consultar destinatarios ni contenido."""
+    lines = ["", "📨 DIAGNÓSTICO DE ENTREGA DE CORREO (mail.notification)"]
+    try:
+        meta = odoo.fields_get("mail.notification")
+        if not isinstance(meta, dict) or not meta:
+            return lines + ["• mail.notification: modelo sin campos visibles."]
+        if "create_date" not in meta:
+            return lines + ["• mail.notification: disponible, pero sin create_date para filtrar el día."]
+        candidates = (
+            "notification_type", "notification_status", "failure_type",
+            "is_read", "read_date"
+        )
+        fields = ["id", "create_date"] + [name for name in candidates if name in meta]
+        records = odoo.search_read(
+            "mail.notification", date_domain(start_utc, end_utc), fields, limit=2000
+        )
+        lines.append(f"• Notificaciones creadas ese día: {len(records)}")
+        for field in candidates:
+            if field not in fields:
+                continue
+            values = Counter(
+                str(row.get(field) if row.get(field) not in (None, False, "") else "sin dato")
+                for row in records
+            )
+            if field in ("is_read",):
+                labels = {"True": "Sí", "False": "No", "sin dato": "Sin dato"}
+                lines.append("• " + field + ": " + "; ".join(
+                    f"{labels.get(key, key)}: {amount}" for key, amount in sorted(values.items())
+                ))
+            else:
+                selection = meta[field].get("selection") or []
+                names = {str(key): str(label) for key, label in selection}
+                lines.append("• " + field + ": " + "; ".join(
+                    f"{names.get(key, key)}: {amount}" for key, amount in sorted(values.items())
+                ))
+        lines.append("No se consultaron ni mostraron destinatarios, direcciones ni contenido.")
+    except Exception as exc:
+        lines.append(f"• mail.notification: no disponible o sin permiso de lectura ({str(exc)[:250]}).")
+    return lines
+
+
 def tracking_diagnostic(odoo):
     """Inspecciona modelos de seguimiento sin leer destinatarios ni contenido."""
     candidates = (
@@ -319,6 +362,7 @@ def main():
         lines += ["Errores de correo:", *failures, ""]
 
     lines.extend(mail_message_diagnostic(odoo, start_utc, end_utc))
+    lines.extend(mail_notification_diagnostic(odoo, start_utc, end_utc))
     lines.extend(tracking_diagnostic(odoo))
     lines.append("")
     lines.extend(whatsapp_report(odoo, start_utc, end_utc))
