@@ -143,10 +143,11 @@ def whatsapp_report(odoo, start_utc, end_utc):
 
         lines = [
             "📱 PASE 360 | CONTROL DE WHATSAPP",
-            f"Mensajes registrados hoy: {len(records)}",
+            f"Mensajes registrados en los últimos 7 días (prueba): {len(records)}",
+            f"Campo de estado leído en Odoo: {status_field}",
         ]
         if not records:
-            lines.append("No se encontraron mensajes para hoy en whatsapp.message.")
+            lines.append("No se encontraron mensajes en los últimos 7 días en whatsapp.message.")
         for key, amount in sorted(counts.items()):
             label = labels.get(key, key)
             lines.append(f"{label}: {amount}")
@@ -219,7 +220,9 @@ def main():
     if failures:
         lines += ["Errores de correo:", *failures, ""]
 
-    lines.extend(whatsapp_report(odoo, start_utc, end_utc))
+    whatsapp_start_utc = (now - timedelta(days=7)).astimezone(timezone.utc).strftime("%Y-%m-%d %H:%M:%S")
+    whatsapp_end_utc = now.astimezone(timezone.utc).strftime("%Y-%m-%d %H:%M:%S")
+    lines.extend(whatsapp_report(odoo, whatsapp_start_utc, whatsapp_end_utc))
     lines += [
         "",
         "Informe de solo lectura. No se modificaron mensajes ni automatizaciones."
