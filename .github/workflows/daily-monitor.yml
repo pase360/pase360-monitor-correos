@@ -3,8 +3,8 @@ name: Pase 360 - Monitor diario de correos
 on:
   workflow_dispatch:
   schedule:
-    # 09:00 Argentina (UTC-3). GitHub puede retrasar ejecuciones programadas.
-    - cron: "0 12 * * *"
+    # 04:00 Argentina (UTC-3). Se programa con margen por posibles demoras de GitHub.
+    - cron: "0 7 * * *"
 
 permissions:
   contents: read
