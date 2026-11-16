@@ -220,19 +220,21 @@ def main():
     end_utc = today_start.astimezone(timezone.utc).strftime("%Y-%m-%d %H:%M:%S")
 
     odoo = Odoo()
-    mail_domain = date_domain(start_utc, end_utc) + [
-        ["subject", "ilike", "Pase 360"]
-    ]
     try:
-        mail_records = odoo.search_read(
+        # Primero cuenta todos los registros conservados de mail.mail del día,
+        # sin mostrar asuntos, direcciones ni destinatarios en el informe.
+        all_mail_records = odoo.search_read(
             "mail.mail",
-            mail_domain,
-            [
-                "id", "subject", "email_to", "state",
-                "failure_reason", "create_date", "email_from"
-            ],
+            date_domain(start_utc, end_utc),
+            ["id", "subject", "state", "failure_reason", "create_date"],
             limit=1000
         )
+        # Luego identifica únicamente los que parecen corresponder a Pase 360.
+        # Se filtra localmente para poder comparar ambos totales.
+        mail_records = [
+            rec for rec in all_mail_records
+            if "pase 360" in str(rec.get("subject") or "").lower()
+        ]
     except Exception as exc:
         raise RuntimeError(
             "No se pudo leer mail.mail. Puede faltar permiso de lectura "
@@ -256,7 +258,8 @@ def main():
         f"Día informado: {yesterday_start.strftime('%d/%m/%Y')}",
         "",
         "✉️ ESTADO DE LOS CORREOS",
-        f"Total de registros de correo Pase 360: {len(mail_records)}",
+        f"Registros mail.mail de todos los asuntos (ayer): {len(all_mail_records)}",
+        f"Registros cuyo asunto contiene Pase 360: {len(mail_records)}",
         f"Enviados por Odoo: {mail_counts['sent']}",
         f"Pendientes de envío: {mail_counts['outgoing']}",
         f"Con error de envío: {mail_counts['exception']}",
@@ -270,8 +273,9 @@ def main():
         "• Cancelados: el envío fue cancelado.",
         "• Otros: estado distinto de los anteriores.",
         "",
-        "Importante: este informe todavía no verifica rebotes en Gmail ni aperturas reales.",
-        "Tampoco puede confirmar que una persona haya leído el correo.",
+        "El conteo Pase 360 se basa en registros mail.mail conservados y asuntos que contienen esa expresión.",
+        "Un cero no demuestra que no se hayan enviado correos: Odoo puede usar otro asunto o eliminar registros.",
+        "Este informe todavía no verifica rebotes en Gmail ni aperturas; tampoco confirma lectura humana.",
         "",
     ]
     if failures:
