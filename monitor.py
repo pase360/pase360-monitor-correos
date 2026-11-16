@@ -143,11 +143,11 @@ def whatsapp_report(odoo, start_utc, end_utc):
 
         lines = [
             "📱 PASE 360 | CONTROL DE WHATSAPP",
-            f"Mensajes registrados en los últimos 7 días (prueba): {len(records)}",
+            f"Mensajes registrados ayer: {len(records)}",
             f"Campo de estado leído en Odoo: {status_field}",
         ]
         if not records:
-            lines.append("No se encontraron mensajes en los últimos 7 días en whatsapp.message.")
+            lines.append("No se encontraron mensajes de ayer en whatsapp.message.")
         for key, amount in sorted(counts.items()):
             label = labels.get(key, key)
             lines.append(f"{label}: {amount}")
@@ -164,10 +164,9 @@ def whatsapp_report(odoo, start_utc, end_utc):
 def main():
     now = datetime.now(TZ)
     today_start = now.replace(hour=0, minute=0, second=0, microsecond=0)
-    start_utc = today_start.astimezone(timezone.utc).strftime("%Y-%m-%d %H:%M:%S")
-    end_utc = (today_start + timedelta(days=1)).astimezone(timezone.utc).strftime(
-        "%Y-%m-%d %H:%M:%S"
-    )
+    yesterday_start = today_start - timedelta(days=1)
+    start_utc = yesterday_start.astimezone(timezone.utc).strftime("%Y-%m-%d %H:%M:%S")
+    end_utc = today_start.astimezone(timezone.utc).strftime("%Y-%m-%d %H:%M:%S")
 
     odoo = Odoo()
     mail_domain = date_domain(start_utc, end_utc) + [
@@ -203,7 +202,7 @@ def main():
 
     lines = [
         "📬 PASE 360 | CONTROL DIARIO",
-        f"Fecha: {now.strftime('%d/%m/%Y')}",
+        f"Día informado: {yesterday_start.strftime('%d/%m/%Y')}",
         "",
         "✉️ CORREOS",
         f"Registros con asunto Pase 360: {len(mail_records)}",
@@ -220,9 +219,7 @@ def main():
     if failures:
         lines += ["Errores de correo:", *failures, ""]
 
-    whatsapp_start_utc = (now - timedelta(days=7)).astimezone(timezone.utc).strftime("%Y-%m-%d %H:%M:%S")
-    whatsapp_end_utc = now.astimezone(timezone.utc).strftime("%Y-%m-%d %H:%M:%S")
-    lines.extend(whatsapp_report(odoo, whatsapp_start_utc, whatsapp_end_utc))
+    lines.extend(whatsapp_report(odoo, start_utc, end_utc))
     lines += [
         "",
         "Informe de solo lectura. No se modificaron mensajes ni automatizaciones."
