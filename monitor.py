@@ -193,6 +193,12 @@ def whatsapp_account_webhook_diagnostic(odoo):
                         except Exception:
                             host = "URL no interpretable"
                         details.append(f"{field}_host={host}")
+                        path = urllib.parse.urlsplit(value).path or "/"
+                        safe_parts = [
+                            ("[segmento oculto]" if len(part) > 32 or re.fullmatch(r"[0-9a-fA-F-]{24,}", part) else part)
+                            for part in path.split("/")
+                        ]
+                        details.append(f"{field}_ruta={'/'.join(safe_parts)}")
             for field in ("app_uid", "account_uid", "phone_uid"):
                 if field in row:
                     details.append(f"{field}_presente={'sí' if row.get(field) else 'no'}")
