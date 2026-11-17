@@ -426,7 +426,15 @@ def email_open_report(start_utc, end_utc):
         return "Abiertos: No disponible"
     params = urllib.parse.urlencode({"from": start_utc, "to": end_utc})
     url = "https://pase360-registro-aperturas.infopase360.workers.dev/stats?" + params
-    req = urllib.request.Request(url, headers={"Authorization": f"Bearer {secret}"}, method="GET")
+    req = urllib.request.Request(
+        url,
+        headers={
+            "Authorization": f"Bearer {secret}",
+            "User-Agent": "Pase360-Daily-Monitor/1.0 (+https://pase360.online)",
+            "Accept": "application/json",
+        },
+        method="GET",
+    )
     try:
         with urllib.request.urlopen(req, timeout=20) as response:
             result = json.loads(response.read().decode())
