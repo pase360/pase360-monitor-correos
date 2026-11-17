@@ -158,6 +158,50 @@ def whatsapp_model_diagnostic(odoo):
         print(f"WhatsApp: no se pudo listar modelos de eventos ({type(exc).__name__}).",
               file=sys.stderr)
 
+
+def whatsapp_account_webhook_diagnostic(odoo):
+    """Consulta configuración webhook de la cuenta sin revelar tokens ni URLs completas."""
+    print("WhatsApp: diagnóstico interno de cuenta y notificaciones:", file=sys.stderr)
+    try:
+        meta = odoo.fields_get("whatsapp.account")
+        wanted = [
+            name for name in (
+                "id", "state", "is_webhook_subscribed",
+                "callback_url", "proxy_webhook_url",
+                "app_uid", "account_uid", "phone_uid"
+            ) if name in meta
+        ]
+        if not wanted:
+            print("WhatsApp: no hay campos de cuenta disponibles para revisar.", file=sys.stderr)
+            return
+        rows = odoo.search_read("whatsapp.account", [], wanted, limit=20, order="id desc")
+        if not rows:
+            print("WhatsApp: no se encontraron cuentas configuradas.", file=sys.stderr)
+            return
+        for row in rows:
+            details = [f"cuenta_id={row.get('id')}"]
+            for field in ("state", "is_webhook_subscribed"):
+                if field in row:
+                    details.append(f"{field}={row.get(field)}")
+            for field in ("callback_url", "proxy_webhook_url"):
+                if field in meta:
+                    value = str(row.get(field) or "").strip()
+                    details.append(f"{field}_configurada={'sí' if value else 'no'}")
+                    if value:
+                        try:
+                            host = urllib.parse.urlsplit(value).hostname or "host no identificable"
+                        except Exception:
+                            host = "URL no interpretable"
+                        details.append(f"{field}_host={host}")
+            for field in ("app_uid", "account_uid", "phone_uid"):
+                if field in row:
+                    details.append(f"{field}_presente={'sí' if row.get(field) else 'no'}")
+            print("WhatsApp: " + "; ".join(details), file=sys.stderr)
+    except Exception as exc:
+        print(f"WhatsApp: no se pudo consultar la cuenta ({type(exc).__name__}: {str(exc)[:220]}).",
+              file=sys.stderr)
+
+
 def whatsapp_history_diagnostic(odoo):
     """Comprueba si Odoo guarda transiciones fechadas de estado de WhatsApp."""
     print("WhatsApp: búsqueda de historial y fechas de eventos:", file=sys.stderr)
@@ -740,6 +784,7 @@ def main():
 
     # Diagnóstico de solo lectura: buscar historial de cambios de estado de WhatsApp.
     whatsapp_model_diagnostic(odoo)
+    whatsapp_account_webhook_diagnostic(odoo)
     whatsapp_history_diagnostic(odoo)
 
 
