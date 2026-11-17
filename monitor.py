@@ -531,7 +531,7 @@ def gmail_automated_mail_report(report_date, next_date):
         since = (report_date - timedelta(days=1)).strftime("%d-%b-%Y")
         before = (next_date + timedelta(days=1)).strftime("%d-%b-%Y")
 
-        status, _ = client.select("[Gmail]/Sent Mail")
+        status, _ = client.select('"[Gmail]/Sent Mail"')
         if status != "OK":
             raise RuntimeError("No se pudo abrir la carpeta Enviados de Gmail.")
         status, data = client.search(None, "SINCE", since, "BEFORE", before)
