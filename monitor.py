@@ -499,6 +499,15 @@ def main():
             "o no estar disponible algún campo. Detalle: " + str(exc)
         ) from exc
 
+    # Diagnóstico de solo lectura para identificar si Odoo conserva eventos reales de entrega/rebote.
+    # Se muestra únicamente en GitHub Actions; nunca se envía a Telegram.
+    for diagnostic in (
+        mail_notification_diagnostic(odoo, mail_records, start_utc, end_utc),
+        tracking_diagnostic(odoo),
+        mail_server_diagnostic(odoo),
+    ):
+        print("\\n".join(diagnostic), file=sys.stderr)
+
     mail_counts = Counter(str(rec.get("state") or "") for rec in mail_records)
     enviados = mail_counts.get("sent", 0)
     rechazados = mail_counts.get("exception", 0)
