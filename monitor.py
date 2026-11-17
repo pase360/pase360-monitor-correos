@@ -111,7 +111,6 @@ def date_domain(start_utc, end_utc):
     ]
 
 
-
 def whatsapp_model_diagnostic(odoo):
     """Busca modelos/campos de WhatsApp y webhooks que puedan guardar eventos fechados."""
     terms = (
@@ -380,6 +379,7 @@ def whatsapp_report(odoo, start_utc, end_utc):
             state = str(row.get("state") or "").strip().lower()
             if state == "read":
                 read += 1
+                delivered += 1
             elif state == "delivered":
                 delivered += 1
 
@@ -432,7 +432,6 @@ def mail_message_diagnostic(odoo, start_utc, end_utc):
         lines.append(f"• mail.message: no se pudo consultar ({str(exc)[:220]}).")
     lines.append("Solo se cuentan registros; no se leen ni muestran destinatarios ni contenido.")
     return lines
-
 
 
 def mail_notification_diagnostic(odoo, mail_records, start_utc, end_utc):
@@ -621,7 +620,6 @@ def tracking_diagnostic(odoo):
     return lines
 
 
-
 def email_open_report(start_utc, end_utc):
     """Devuelve el total de correos identificados por el píxel."""
     secret = os.getenv("REPORT_SECRET", "").strip()
@@ -665,8 +663,6 @@ def email_open_report(start_utc, end_utc):
     except Exception as exc:
         print(f"Aperturas: respuesta inválida del Worker ({type(exc).__name__}).", file=sys.stderr)
         return "Abiertos: No disponible"
-
-
 
 
 def gmail_automated_mail_report(report_date, next_date):
@@ -825,8 +821,6 @@ def main():
         mail_server_diagnostic(odoo),
     ):
         print("\\n".join(diagnostic), file=sys.stderr)
-
-
 
     # Los enviados se cuentan en Odoo, como en la versión original.
     # Gmail se consulta únicamente para detectar avisos de rebote recibidos.
