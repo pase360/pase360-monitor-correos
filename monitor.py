@@ -321,7 +321,7 @@ def whatsapp_history_diagnostic(odoo):
         )
 
 def whatsapp_report(odoo, start_utc, end_utc):
-    """Cuenta mensajes salientes del día según el estado actual conservado por Odoo."""
+    """Cuenta envíos por create_date y lecturas/entregas registradas por write_date."""
     unavailable = [
         "Enviados: No disponible",
         "Entregados: No disponible",
@@ -331,48 +331,62 @@ def whatsapp_report(odoo, start_utc, end_utc):
         meta = odoo.fields_get("whatsapp.message")
         if not isinstance(meta, dict) or not meta or "state" not in meta:
             return unavailable
-
-        fields = ["id", "state"]
-        if "message_type" in meta:
-            fields.append("message_type")
-        if "create_date" not in meta:
+        if "create_date" not in meta or "write_date" not in meta:
             return unavailable
 
-        records = odoo.search_read(
+        fields = ["id", "state", "create_date", "write_date"]
+        if "message_type" in meta:
+            fields.append("message_type")
+
+        # Enviados: mensajes salientes creados durante el día informado.
+        sent_records = odoo.search_read(
             "whatsapp.message",
             date_domain(start_utc, end_utc),
             fields,
-            limit=2000,
+            limit=3000,
         )
-        selection = meta["state"].get("selection") or []
-        labels = {str(key): str(label).strip().lower() for key, label in selection}
-        counts = Counter()
 
-        for row in records:
-            if "message_type" in fields:
-                kind = str(row.get("message_type") or "").strip().lower()
-                if kind not in ("outbound", "outgoing"):
-                    continue
+        # Lecturas y entregas: mensajes cuyo último cambio se registró ese día,
+        # aunque hayan sido enviados en días anteriores.
+        changed_records = odoo.search_read(
+            "whatsapp.message",
+            [
+                ["write_date", ">=", start_utc],
+                ["write_date", "<", end_utc],
+            ],
+            fields,
+            limit=3000,
+        )
 
+        def is_outbound(row):
+            if "message_type" not in fields:
+                return True
+            kind = str(row.get("message_type") or "").strip().lower()
+            return kind in ("outbound", "outgoing")
+
+        sent_ids = set()
+        for row in sent_records:
+            if not is_outbound(row):
+                continue
             state = str(row.get("state") or "").strip().lower()
-            value = state + " " + labels.get(state, "")
+            if state in ("envied", "delivered", "read"):
+                sent_ids.add(row.get("id"))
 
-            if state in ("read",) or "leíd" in value or "leido" in value:
-                counts["sent"] += 1
-                counts["delivered"] += 1
-                counts["read"] += 1
-            elif state in ("delivered",) or "entreg" in value:
-                counts["sent"] += 1
-                counts["delivered"] += 1
-            elif state in ("envied",) or any(
-                term in value for term in ("sent", "enviado")
-            ):
-                counts["sent"] += 1
+        delivered = 0
+        read = 0
+        for row in changed_records:
+            if not is_outbound(row):
+                continue
+            state = str(row.get("state") or "").strip().lower()
+            if state == "read":
+                read += 1
+            elif state == "delivered":
+                delivered += 1
 
         return [
-            f"Enviados: {counts['sent']}",
-            f"Entregados (estado actual; incluye leídos): {counts['delivered']}",
-            f"Leídos (estado actual): {counts['read']}",
+            f"Enviados: {len(sent_ids)}",
+            f"Entregados: {delivered}",
+            f"Leídos: {read}",
         ]
     except Exception as exc:
         print(
