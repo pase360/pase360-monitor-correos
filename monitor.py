@@ -158,6 +158,46 @@ def whatsapp_model_diagnostic(odoo):
         print(f"WhatsApp: no se pudo listar modelos de eventos ({type(exc).__name__}).",
               file=sys.stderr)
 
+def whatsapp_history_diagnostic(odoo):
+    """Inspecciona historial de estados sin mostrar datos personales ni contenido."""
+    print("WhatsApp: búsqueda de historial y fechas de eventos:", file=sys.stderr)
+    for model in ("mail.message", "mail.tracking.value", "mail.tracking.value.mixin"):
+        try:
+            meta = odoo.fields_get(model)
+            relevant = [
+                name for name in meta
+                if any(term in name.lower() for term in (
+                    "tracking", "field", "old", "new", "value", "date",
+                    "model", "res_id", "message", "subtype"
+                ))
+            ]
+            print(
+                f"WhatsApp: {model}: " + (", ".join(relevant[:50]) or "sin campos de historial"),
+                file=sys.stderr
+            )
+        except Exception as exc:
+            print(f"WhatsApp: {model}: no disponible ({type(exc).__name__}).", file=sys.stderr)
+
+    try:
+        meta = odoo.fields_get("whatsapp.message")
+        fields = [
+            name for name in ("id", "state", "message_type", "create_date",
+                              "write_date", "msg_uid", "mail_message_id")
+            if name in meta
+        ]
+        records = odoo.search_read(
+            "whatsapp.message", [], fields, limit=15, order="write_date desc"
+        )
+        print(
+            "WhatsApp: muestra técnica (solo ID, estado y fechas): " +
+            json.dumps(records, ensure_ascii=False, default=str)[:3500],
+            file=sys.stderr
+        )
+    except Exception as exc:
+        print(f"WhatsApp: no se pudieron inspeccionar fechas ({type(exc).__name__}).",
+              file=sys.stderr)
+
+
 def whatsapp_report(odoo, start_utc, end_utc):
     """Devuelve únicamente los tres estados solicitados de WhatsApp."""
     try:
@@ -626,8 +666,9 @@ def main():
     ):
         print("\\n".join(diagnostic), file=sys.stderr)
 
-    # Diagnóstico temporal de campos y modelos de eventos de WhatsApp.
+    # Diagnóstico de solo lectura: buscar historial de cambios de estado de WhatsApp.
     whatsapp_model_diagnostic(odoo)
+    whatsapp_history_diagnostic(odoo)
 
 
     # Los enviados se cuentan en Odoo, como en la versión original.
