@@ -7,6 +7,11 @@ import urllib.request
 import urllib.error
 import urllib.parse
 from collections import Counter
+from email import policy
+from email.parser import BytesParser
+from email.utils import parsedate_to_datetime, parseaddr
+from datetime import date
+import imaplib
 from datetime import datetime, timedelta, timezone
 from zoneinfo import ZoneInfo
 
@@ -462,6 +467,135 @@ def email_open_report(start_utc, end_utc):
 
 
 
+
+def gmail_automated_mail_report(report_date, next_date):
+    """Cuenta solo las cuatro plantillas automáticas en Enviados y sus rebotes recibidos."""
+    address = os.getenv("GMAIL_ADDRESS", "infopase360@gmail.com").strip()
+    app_password = required("GMAIL_APP_PASSWORD").replace(" ", "")
+    phrases = (
+        "invitación para adherir",
+        "multiplica tus ventas con la comunidad de beneficios de pase 360",
+        "crea credenciales qr de beneficios para los miembros de tu organización",
+        "no dejes pasar la oportunidad de pertenecer a la red de beneficios pase 360",
+    )
+
+    def in_report_day(message):
+        raw_date = message.get("Date")
+        if not raw_date:
+            return False
+        try:
+            dt = parsedate_to_datetime(str(raw_date))
+            if dt is None:
+                return False
+            if dt.tzinfo is None:
+                dt = dt.replace(tzinfo=TZ)
+            return report_date <= dt.astimezone(TZ).date() < next_date
+        except (TypeError, ValueError, OverflowError):
+            return False
+
+    def message_text(message):
+        chunks = []
+        for part in message.walk():
+            if part.get_content_maintype() == "multipart":
+                continue
+            payload = part.get_payload(decode=True)
+            if payload:
+                charset = part.get_content_charset() or "utf-8"
+                try:
+                    chunks.append(payload.decode(charset, errors="replace"))
+                except LookupError:
+                    chunks.append(payload.decode("utf-8", errors="replace"))
+            elif part.get_content_type() == "message/rfc822":
+                nested = part.get_payload()
+                if isinstance(nested, list):
+                    for item in nested:
+                        chunks.append(str(item.get("Subject", "")))
+        return "\\n".join(chunks).casefold()
+
+    def fetch_message(client, uid, full=False):
+        section = "BODY.PEEK[]" if full else "BODY.PEEK[HEADER]"
+        status, data = client.uid("fetch", uid, f"({section})")
+        if status != "OK":
+            return None
+        for item in data:
+            if isinstance(item, tuple) and isinstance(item[1], bytes):
+                return BytesParser(policy=policy.default).parsebytes(item[1])
+        return None
+
+    client = None
+    try:
+        client = imaplib.IMAP4_SSL("imap.gmail.com", 993, timeout=30)
+        client.login(address, app_password)
+
+        # Ampliamos un día a cada lado y filtramos por fecha real del encabezado en Córdoba.
+        since = (report_date - timedelta(days=1)).strftime("%d-%b-%Y")
+        before = (next_date + timedelta(days=1)).strftime("%d-%b-%Y")
+
+        status, _ = client.select('"[Gmail]/Sent Mail', readonly=True)
+        if status != "OK":
+            raise RuntimeError("No se pudo abrir la carpeta Enviados de Gmail.")
+        status, data = client.uid("search", None, "SINCE", since, "BEFORE", before)
+        if status != "OK":
+            raise RuntimeError("No se pudo buscar en Enviados de Gmail.")
+
+        sent_uids = set()
+        for uid in (data[0] or b"").split():
+            msg = fetch_message(client, uid, full=False)
+            if not msg or not in_report_day(msg):
+                continue
+            subject = str(msg.get("Subject", "")).casefold()
+            if any(phrase in subject for phrase in phrases):
+                sent_uids.add(uid)
+
+        status, _ = client.select("INBOX", readonly=True)
+        if status != "OK":
+            raise RuntimeError("No se pudo abrir la bandeja de entrada de Gmail.")
+        status, data = client.uid("search", None, "SINCE", since, "BEFORE", before)
+        if status != "OK":
+            raise RuntimeError("No se pudo buscar avisos de rebote en Gmail.")
+
+        bounce_uids = set()
+        bounce_terms = (
+            "delivery status notification",
+            "undelivered mail",
+            "mail delivery failed",
+            "failure notice",
+            "returned mail",
+            "delivery failure",
+        )
+        for uid in (data[0] or b"").split():
+            msg = fetch_message(client, uid, full=True)
+            if not msg or not in_report_day(msg):
+                continue
+            sender = parseaddr(str(msg.get("From", "")))[1].casefold()
+            subject = str(msg.get("Subject", "")).casefold()
+            looks_like_bounce = (
+                "mailer-daemon" in sender
+                or "postmaster" in sender
+                or any(term in subject for term in bounce_terms)
+            )
+            if not looks_like_bounce:
+                continue
+            original = message_text(msg)
+            if any(phrase in original for phrase in phrases):
+                bounce_uids.add(uid)
+
+        return len(sent_uids), len(bounce_uids)
+    except Exception as exc:
+        print(
+            f"Gmail: no se pudo consultar Enviados/rebotes "
+            f"({type(exc).__name__}: {str(exc)[:250]}).",
+            file=sys.stderr,
+        )
+        return None, None
+    finally:
+        if client is not None:
+            try:
+                client.logout()
+            except Exception:
+                pass
+
+
 def main():
     # El informe siempre consulta el día calendario anterior, tanto manual como automático.
     today = datetime.now(TZ).replace(hour=0, minute=0, second=0, microsecond=0)
@@ -506,19 +640,21 @@ def main():
     ):
         print("\\n".join(diagnostic), file=sys.stderr)
 
-    mail_counts = Counter(str(rec.get("state") or "") for rec in mail_records)
-    enviados = mail_counts.get("sent", 0)
-    rechazados = mail_counts.get("exception", 0)
+    enviados, rechazados = gmail_automated_mail_report(
+        report_date.date(), next_date.date()
+    )
+    enviados_texto = str(enviados) if enviados is not None else "No disponible"
+    rechazados_texto = str(rechazados) if rechazados is not None else "No disponible"
 
     lines = [
         "PASE 360 | CONTROL DIARIO",
         f"Día: {report_date.strftime('%d/%m/%Y')}",
         "",
         "CORREOS ELECTRÓNICOS",
-        f"Enviados: {enviados}",
+        f"Enviados: {enviados_texto}",
         "Entregados: No disponible",
         email_open_report(start_utc, end_utc),
-        f"Rechazados: {rechazados}",
+        f"Rechazados: {rechazados_texto}",
         "Enviados a spam: No disponible",
         "",
         "WHATSAPP",
