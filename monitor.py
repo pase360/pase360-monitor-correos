@@ -5,6 +5,7 @@ import os
 import sys
 import urllib.request
 import urllib.error
+import urllib.parse
 from collections import Counter
 from datetime import datetime, timedelta, timezone
 from zoneinfo import ZoneInfo
@@ -399,6 +400,36 @@ def tracking_diagnostic(odoo):
     return lines
 
 
+
+def email_open_report(start_utc, end_utc):
+    """Consulta aperturas aproximadas registradas por el receptor Cloudflare."""
+    lines = ["", "👁️ APERTURAS DE CORREO (SEGUIMIENTO POR PIXEL)"]
+    secret = os.getenv("REPORT_SECRET", "").strip()
+    if not secret:
+        return lines + ["• No está configurado REPORT_SECRET; no se consultaron aperturas."]
+
+    params = urllib.parse.urlencode({"from": start_utc, "to": end_utc})
+    url = "https://pase360-registro-aperturas.infopase360.workers.dev/stats?" + params
+    req = urllib.request.Request(
+        url,
+        headers={
+            "Authorization": f"Bearer {secret}",
+            "User-Agent": "Pase360-Mail-Monitor/1.0",
+        },
+        method="GET",
+    )
+    try:
+        with urllib.request.urlopen(req, timeout=20) as response:
+            result = json.loads(response.read().decode())
+        lines.append(f"• Solicitudes del píxel: {int(result.get('aperturas', 0))}")
+        lines.append(f"• Correos identificados con al menos una solicitud: {int(result.get('correos_identificados', 0))}")
+        lines.append("• Son aperturas aproximadas: filtros de privacidad y precargas automáticas pueden alterar el conteo.")
+        lines.append("• No demuestra lectura humana ni confirma entrega del correo.")
+    except Exception as exc:
+        lines.append(f"• No se pudo consultar el receptor de aperturas: {str(exc)[:350]}")
+    return lines
+
+
 def main():
     # Informe diario automático: siempre consulta el día calendario anterior en Argentina.
     report_date = datetime.now(TZ).replace(hour=0, minute=0, second=0, microsecond=0) - timedelta(days=1)
@@ -471,6 +502,7 @@ def main():
     lines.extend(mail_message_diagnostic(odoo, start_utc, end_utc))
     lines.extend(mail_notification_diagnostic(odoo, mail_records, start_utc, end_utc))
     lines.extend(mail_server_diagnostic(odoo))
+    lines.extend(email_open_report(start_utc, end_utc))
     lines.extend(tracking_diagnostic(odoo))
     lines.append("")
     lines.extend(whatsapp_report(odoo, start_utc, end_utc))
