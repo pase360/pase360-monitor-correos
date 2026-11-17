@@ -105,6 +105,53 @@ def date_domain(start_utc, end_utc):
     ]
 
 
+
+def whatsapp_model_diagnostic(odoo):
+    """Busca modelos/campos de WhatsApp y webhooks que puedan guardar eventos fechados."""
+    terms = (
+        "date", "time", "state", "status", "event", "deliver", "read",
+        "sent", "message", "webhook", "track", "uid", "timestamp",
+        "provider", "notification", "error", "callback"
+    )
+    print("WhatsApp: diagnóstico de modelos de eventos disponibles:", file=sys.stderr)
+    try:
+        models = odoo.search_read(
+            "ir.model",
+            ["|", ["model", "ilike", "whatsapp"], ["model", "ilike", "webhook"]],
+            ["model", "name"], limit=200, order="model asc"
+        )
+        if not models:
+            print("WhatsApp: no se encontraron modelos con nombre whatsapp/webhook.", file=sys.stderr)
+            return
+        for item in models:
+            model = str(item.get("model") or "")
+            if not model:
+                continue
+            try:
+                meta = odoo.fields_get(model)
+                relevant = [name for name in meta if any(t in name.lower() for t in terms)]
+                details = []
+                for name in relevant[:45]:
+                    info = meta[name]
+                    part = name
+                    if info.get("type"):
+                        part += ":" + str(info["type"])
+                    if info.get("relation"):
+                        part += "->" + str(info["relation"])
+                    selection = info.get("selection") or []
+                    if selection and any(t in name.lower() for t in ("state", "status", "event")):
+                        part += "[" + ",".join(str(k) for k, _ in selection[:12]) + "]"
+                    details.append(part)
+                print(f"WhatsApp: modelo {model}: " +
+                      (", ".join(details) if details else "sin campos de evento reconocibles"),
+                      file=sys.stderr)
+            except Exception as exc:
+                print(f"WhatsApp: modelo {model}: sin acceso a metadatos ({type(exc).__name__}).",
+                      file=sys.stderr)
+    except Exception as exc:
+        print(f"WhatsApp: no se pudo listar modelos de eventos ({type(exc).__name__}).",
+              file=sys.stderr)
+
 def whatsapp_report(odoo, start_utc, end_utc):
     """Cuenta eventos diarios de WhatsApp usando el historial de tracking de Odoo."""
     unavailable = ["Enviados: No disponible", "Entregados: No disponible", "Leídos: No disponible"]
@@ -594,6 +641,8 @@ def main():
     mail_counts = Counter(str(rec.get("state") or "") for rec in mail_records)
     enviados = mail_counts.get("sent", 0)
     rechazados = mail_counts.get("exception", 0)
+
+    whatsapp_model_diagnostic(odoo)
 
     lines = [
         "PASE 360 | CONTROL DIARIO",
