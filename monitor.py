@@ -238,16 +238,7 @@ def mail_notification_diagnostic(odoo, mail_records, start_utc, end_utc):
             return lines + ["• mail.notification: modelo sin campos visibles."]
 
         mail_ids = [row["id"] for row in mail_records if row.get("id")]
-        if not mail_ids:
-            return lines + ["• No hay correos Pase 360 conservados para consultar."]
-
-        mail_meta = odoo.fields_get("mail.mail")
-        mail_link_count = sum(
-            1 for row in mail_records
-            if row.get("mail_message_id") not in (None, False, [], ())
-        )
-        lines.append(f"• Correos Pase 360 consultados: {len(mail_ids)}")
-        lines.append(f"• Correos con vínculo mail_message_id informado: {mail_link_count}")
+        lines.append(f"• Correos Pase 360 conservados para consultar: {len(mail_ids)}")
 
         msg_meta = odoo.fields_get("mail.message")
         msg_fields = ["id"]
@@ -293,7 +284,14 @@ def mail_notification_diagnostic(odoo, mail_records, start_utc, end_utc):
             )
             relation_used = "mail.message.notification_ids"
 
-        if not records and "mail_mail_id" in meta:
+        if not records and "create_date" in meta:
+            records = odoo.search_read(
+                "mail.notification", date_domain(start_utc, end_utc),
+                fields, limit=2000, order="id desc"
+            )
+            if records:
+                relation_used = "create_date del día (sin vínculo confirmado a una plantilla)"
+        if not records and mail_ids and "mail_mail_id" in meta:
             records = odoo.search_read(
                 "mail.notification", [["mail_mail_id", "in", mail_ids]],
                 fields, limit=2000, order="id desc"
