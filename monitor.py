@@ -400,8 +400,8 @@ def tracking_diagnostic(odoo):
 
 
 def main():
-    # Fecha fija de investigación: últimos correos informados por el usuario.
-    report_date = datetime(2026, 11, 13, tzinfo=TZ)
+    # Informe diario automático: siempre consulta el día calendario anterior en Argentina.
+    report_date = datetime.now(TZ).replace(hour=0, minute=0, second=0, microsecond=0) - timedelta(days=1)
     next_date = report_date + timedelta(days=1)
     start_utc = report_date.astimezone(timezone.utc).strftime("%Y-%m-%d %H:%M:%S")
     end_utc = next_date.astimezone(timezone.utc).strftime("%Y-%m-%d %H:%M:%S")
