@@ -321,42 +321,66 @@ def whatsapp_history_diagnostic(odoo):
         )
 
 def whatsapp_report(odoo, start_utc, end_utc):
-    """Devuelve únicamente los tres estados solicitados de WhatsApp."""
+    """Cuenta mensajes salientes del día según el estado actual conservado por Odoo."""
+    unavailable = [
+        "Enviados: No disponible",
+        "Entregados: No disponible",
+        "Leídos: No disponible",
+    ]
     try:
         meta = odoo.fields_get("whatsapp.message")
-        if not isinstance(meta, dict) or not meta:
-            return ["Enviados: No disponible", "Entregados: No disponible", "Leídos: No disponible"]
-        status_field = next((name for name in ("state", "status") if name in meta), None)
-        if not status_field:
-            return ["Enviados: No disponible", "Entregados: No disponible", "Leídos: No disponible"]
-        fields = ["id", status_field]
-        domain = date_domain(start_utc, end_utc) if "create_date" in meta else []
-        records = odoo.search_read("whatsapp.message", domain, fields, limit=2000)
-        selection = meta[status_field].get("selection") or []
+        if not isinstance(meta, dict) or not meta or "state" not in meta:
+            return unavailable
+
+        fields = ["id", "state"]
+        if "message_type" in meta:
+            fields.append("message_type")
+        if "create_date" not in meta:
+            return unavailable
+
+        records = odoo.search_read(
+            "whatsapp.message",
+            date_domain(start_utc, end_utc),
+            fields,
+            limit=2000,
+        )
+        selection = meta["state"].get("selection") or []
         labels = {str(key): str(label).strip().lower() for key, label in selection}
         counts = Counter()
+
         for row in records:
-            key = str(row.get(status_field) or "").strip().lower()
-            value = key + " " + labels.get(key, "")
-            # Un mensaje leído también cuenta como entregado y enviado;
-            # uno entregado también cuenta como enviado.
-            if any(x in value for x in ("read", "leíd", "leido")):
+            if "message_type" in fields:
+                kind = str(row.get("message_type") or "").strip().lower()
+                if kind not in ("outbound", "outgoing"):
+                    continue
+
+            state = str(row.get("state") or "").strip().lower()
+            value = state + " " + labels.get(state, "")
+
+            if state in ("read",) or "leíd" in value or "leido" in value:
                 counts["sent"] += 1
                 counts["delivered"] += 1
                 counts["read"] += 1
-            elif any(x in value for x in ("deliver", "entreg")):
+            elif state in ("delivered",) or "entreg" in value:
                 counts["sent"] += 1
                 counts["delivered"] += 1
-            elif any(x in value for x in ("sent", "enviado", "send", "accepted", "aceptado")):
+            elif state in ("envied",) or any(
+                term in value for term in ("sent", "enviado")
+            ):
                 counts["sent"] += 1
+
         return [
             f"Enviados: {counts['sent']}",
-            f"Entregados: {counts['delivered']}",
-            f"Leídos: {counts['read']}",
+            f"Entregados (estado actual; incluye leídos): {counts['delivered']}",
+            f"Leídos (estado actual): {counts['read']}",
         ]
     except Exception as exc:
-        print(f"WhatsApp: no se pudo consultar whatsapp.message ({type(exc).__name__}: {str(exc)[:250]}).", file=sys.stderr)
-        return ["Enviados: No disponible", "Entregados: No disponible", "Leídos: No disponible"]
+        print(
+            f"WhatsApp: no se pudo consultar whatsapp.message "
+            f"({type(exc).__name__}: {str(exc)[:250]}).",
+            file=sys.stderr,
+        )
+        return unavailable
 
 
 def mail_message_diagnostic(odoo, start_utc, end_utc):
@@ -788,10 +812,6 @@ def main():
     ):
         print("\\n".join(diagnostic), file=sys.stderr)
 
-    # Diagnóstico de solo lectura: buscar historial de cambios de estado de WhatsApp.
-    whatsapp_model_diagnostic(odoo)
-    whatsapp_account_webhook_diagnostic(odoo)
-    whatsapp_history_diagnostic(odoo)
 
 
     # Los enviados se cuentan en Odoo, como en la versión original.
