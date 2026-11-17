@@ -37,4 +37,6 @@ jobs:
           REPORT_TIMEZONE: America/Argentina/Cordoba
           REPORT_PERIOD: yesterday
           REPORT_SECRET: ${{ secrets.REPORT_SECRET }}
+          GMAIL_ADDRESS: infopase360@gmail.com
+          GMAIL_APP_PASSWORD: ${{ secrets.GMAIL_APP_PASSWORD }}
         run: python monitor.py
