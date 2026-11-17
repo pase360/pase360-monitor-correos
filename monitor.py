@@ -428,8 +428,10 @@ def email_open_report(start_utc, end_utc):
 
 
 def main():
-    # Informe diario automático: siempre consulta el día calendario anterior en Argentina.
-    report_date = datetime.now(TZ).replace(hour=0, minute=0, second=0, microsecond=0) - timedelta(days=1)
+    # Ejecución manual: permite consultar hoy o ayer. El cron conserva ayer.
+    today = datetime.now(TZ).replace(hour=0, minute=0, second=0, microsecond=0)
+    period = os.getenv("REPORT_PERIOD", "yesterday").strip().lower()
+    report_date = today if period == "today" else today - timedelta(days=1)
     next_date = report_date + timedelta(days=1)
     start_utc = report_date.astimezone(timezone.utc).strftime("%Y-%m-%d %H:%M:%S")
     end_utc = next_date.astimezone(timezone.utc).strftime("%Y-%m-%d %H:%M:%S")
