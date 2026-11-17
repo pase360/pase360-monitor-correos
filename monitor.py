@@ -512,9 +512,9 @@ def gmail_automated_mail_report(report_date, next_date):
                         chunks.append(str(item.get("Subject", "")))
         return "\\n".join(chunks).casefold()
 
-    def fetch_message(client, uid, full=False):
+    def fetch_message(client, sequence, full=False):
         section = "BODY.PEEK[]" if full else "BODY.PEEK[HEADER]"
-        status, data = client.uid("fetch", uid, f"({section})")
+        status, data = client.fetch(sequence, f"({section})")
         if status != "OK":
             return None
         for item in data:
@@ -534,7 +534,7 @@ def gmail_automated_mail_report(report_date, next_date):
         status, _ = client.select("[Gmail]/Sent Mail", readonly=True)
         if status != "OK":
             raise RuntimeError("No se pudo abrir la carpeta Enviados de Gmail.")
-        status, data = client.uid("search", None, "SINCE", since, "BEFORE", before)
+        status, data = client.search(None, "SINCE", since, "BEFORE", before)
         if status != "OK":
             raise RuntimeError("No se pudo buscar en Enviados de Gmail.")
 
@@ -550,7 +550,7 @@ def gmail_automated_mail_report(report_date, next_date):
         status, _ = client.select("INBOX", readonly=True)
         if status != "OK":
             raise RuntimeError("No se pudo abrir la bandeja de entrada de Gmail.")
-        status, data = client.uid("search", None, "SINCE", since, "BEFORE", before)
+        status, data = client.search(None, "SINCE", since, "BEFORE", before)
         if status != "OK":
             raise RuntimeError("No se pudo buscar avisos de rebote en Gmail.")
 
