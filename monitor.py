@@ -432,7 +432,20 @@ def email_open_report(start_utc, end_utc):
             result = json.loads(response.read().decode())
         return f"Abiertos: {int(result.get('correos_identificados', 0))}"
     except urllib.error.HTTPError as exc:
-        print(f"Aperturas: el Worker respondió HTTP {exc.code}.", file=sys.stderr)
+        # Diagnóstico seguro: nunca registrar Authorization ni REPORT_SECRET.
+        body = exc.read().decode("utf-8", errors="replace")
+        if secret:
+            body = body.replace(secret, "[CLAVE REDACTADA]")
+        body = " ".join(body.split())[:350]
+        server = exc.headers.get("Server", "no informado") if exc.headers else "no informado"
+        cf_ray = exc.headers.get("CF-Ray", "no informado") if exc.headers else "no informado"
+        content_type = exc.headers.get("Content-Type", "no informado") if exc.headers else "no informado"
+        print(
+            f"Aperturas: HTTP {exc.code}; servidor={server}; "
+            f"CF-Ray={cf_ray}; Content-Type={content_type}; "
+            f"respuesta={body or '(vacía)'}",
+            file=sys.stderr
+        )
         return "Abiertos: No disponible"
     except urllib.error.URLError as exc:
         print(f"Aperturas: no se pudo conectar con el Worker ({exc.reason}).", file=sys.stderr)
