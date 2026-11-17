@@ -629,7 +629,6 @@ def main():
     # Diagnóstico temporal de campos y modelos de eventos de WhatsApp.
     whatsapp_model_diagnostic(odoo)
 
-    for diagnostic in ():
 
     # Los enviados se cuentan en Odoo, como en la versión original.
     # Gmail se consulta únicamente para detectar avisos de rebote recibidos.
