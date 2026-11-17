@@ -384,10 +384,9 @@ def email_open_report(start_utc, end_utc):
 
 
 def main():
-    # Ejecución manual: permite consultar hoy o ayer. El cron conserva ayer.
+    # El informe siempre consulta el día calendario anterior, tanto manual como automático.
     today = datetime.now(TZ).replace(hour=0, minute=0, second=0, microsecond=0)
-    period = os.getenv("REPORT_PERIOD", "yesterday").strip().lower()
-    report_date = today if period == "today" else today - timedelta(days=1)
+    report_date = today - timedelta(days=1)
     next_date = report_date + timedelta(days=1)
     start_utc = report_date.astimezone(timezone.utc).strftime("%Y-%m-%d %H:%M:%S")
     end_utc = next_date.astimezone(timezone.utc).strftime("%Y-%m-%d %H:%M:%S")
@@ -437,7 +436,7 @@ def main():
         "WHATSAPP",
         *whatsapp_report(odoo, start_utc, end_utc),
     ]
-    telegram("\\n".join(lines))
+    telegram("\n".join(lines))
 
 
 if __name__ == "__main__":
