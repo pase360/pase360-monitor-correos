@@ -532,30 +532,7 @@ def gmail_automated_mail_report(report_date, next_date):
         since = (report_date - timedelta(days=1)).strftime("%d-%b-%Y")
         before = (next_date + timedelta(days=1)).strftime("%d-%b-%Y")
 
-        # Gmail puede exponer Enviados con distintos nombres según idioma/configuración.
-        # Detectamos la carpeta por el atributo IMAP especial \\Sent, no por una ruta supuesta.
-        status, mailbox_rows = client.list()
-        if status != "OK" or not mailbox_rows:
-            raise RuntimeError("Gmail no permitió listar las carpetas IMAP.")
-
-        sent_mailbox = None
-        for row in mailbox_rows:
-            if not isinstance(row, bytes):
-                continue
-            line = row.decode("utf-8", errors="replace")
-            match = re.search(r'"((?:\\\\.|[^"])*)"\\s*        status, data = client.search(None, "SINCE", since, "BEFORE", before)
-        if status != "OK":
-            raise RuntimeError("No se pudo buscar en Enviados de Gmail.")
-
-        sent_uids = set()
-        for uid in (data[0] or b"").split():
-            msg = fetch_message(client, uid, full=False)
-            if not msg or not in_report_day(msg):
-                continue
-            subject = str(msg.get("Subject", "")).casefold()
-            if any(phrase in subject for phrase in phrases):
-                sent_uids.add(uid)
-
+        # Gmail se consulta solo para detectar avisos de rebote recibidos.
         status, _ = client.select("INBOX")
         if status != "OK":
             raise RuntimeError("No se pudo abrir la bandeja de entrada de Gmail.")
@@ -589,14 +566,14 @@ def gmail_automated_mail_report(report_date, next_date):
             if any(phrase in original for phrase in phrases):
                 bounce_uids.add(uid)
 
-        return len(sent_uids), len(bounce_uids)
+        return len(bounce_uids)
     except Exception as exc:
         print(
             f"Gmail: no se pudo consultar Enviados/rebotes "
             f"({type(exc).__name__}: {str(exc)[:250]}).",
             file=sys.stderr,
         )
-        return None, None
+        return None
     finally:
         if client is not None:
             try:
@@ -649,10 +626,13 @@ def main():
     ):
         print("\\n".join(diagnostic), file=sys.stderr)
 
-    enviados, rechazados = gmail_automated_mail_report(
+    # Los enviados se cuentan en Odoo, como en la versión original.
+    # Gmail se consulta únicamente para detectar avisos de rebote recibidos.
+    enviados = sum(1 for rec in mail_records if rec.get("state") == "sent")
+    rechazados = gmail_automated_mail_report(
         report_date.date(), next_date.date()
     )
-    enviados_texto = str(enviados) if enviados is not None else "No disponible"
+    enviados_texto = str(enviados)
     rechazados_texto = str(rechazados) if rechazados is not None else "No disponible"
 
     lines = [
