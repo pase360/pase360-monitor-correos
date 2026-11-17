@@ -113,11 +113,30 @@ def whatsapp_report(odoo, start_utc, end_utc):
             return ["Enviados: No disponible", "Entregados: No disponible", "Leídos: No disponible"]
         status_field = next((name for name in ("state", "status") if name in meta), None)
         if not status_field:
+            print("WhatsApp: no se encontró campo state/status. Campos disponibles: " +
+                  ", ".join(meta.keys()), file=sys.stderr)
             return ["Enviados: No disponible", "Entregados: No disponible", "Leídos: No disponible"]
-        fields = ["id", status_field]
+
+        # Inspección segura de metadatos: identificar fechas de cada hito sin leer datos personales.
+        event_terms = ("date", "datetime", "sent", "deliver", "read", "send", "message_status", "state", "status")
+        event_fields = [
+            name for name in meta
+            if any(term in name.lower() for term in event_terms)
+        ]
+        selection = meta[status_field].get("selection") or []
+        print("WhatsApp: campo de estado=" + status_field, file=sys.stderr)
+        print("WhatsApp: campos candidatos para fechas/estados=" +
+              ", ".join(event_fields), file=sys.stderr)
+        print("WhatsApp: valores de estado=" +
+              "; ".join(f"{key}={label}" for key, label in selection), file=sys.stderr)
+
+        fields = ["id", status_field] + [
+            name for name in event_fields
+            if name != status_field and meta[name].get("type") in ("date", "datetime", "selection", "boolean")
+        ]
         domain = date_domain(start_utc, end_utc) if "create_date" in meta else []
         records = odoo.search_read("whatsapp.message", domain, fields, limit=2000)
-        selection = meta[status_field].get("selection") or []
+        print(f"WhatsApp: registros consultados en ventana de creación={len(records)}", file=sys.stderr)
         labels = {str(key): str(label).strip().lower() for key, label in selection}
         counts = Counter()
         for row in records:
