@@ -184,14 +184,31 @@ def whatsapp_report(odoo, start_utc, end_utc):
             "ir.model.fields", [["id", "in", field_ids]],
             ["id", "model", "name"], limit=5000
         )
+        field_by_id = {row["id"]: row for row in field_rows}
+        tracked_counts = Counter(
+            relation_id(row.get(tracking_field_field))
+            for row in tracking_rows
+            if relation_id(row.get(tracking_field_field)) is not None
+        )
+        tracked_summary = []
+        for field_id, amount in tracked_counts.most_common(40):
+            info = field_by_id.get(field_id, {})
+            model_name = str(info.get("model") or "?")
+            technical_name = str(info.get("name") or "?")
+            tracked_summary.append(f"{model_name}.{technical_name}={amount}")
+        print("WhatsApp: campos realmente modificados hoy=" +
+              ("; ".join(tracked_summary) if tracked_summary else "ninguno"), file=sys.stderr)
+
         state_field_ids = {
             row["id"] for row in field_rows
             if row.get("model") == "whatsapp.message" and row.get("name") == status_field
         }
         if not state_field_ids:
-            print("WhatsApp: no se encontraron cambios del campo de estado en el historial diario.", file=sys.stderr)
-            # Si el modelo y las relaciones se consultaron correctamente, cero cambios es un resultado válido.
-            return ["Enviados: 0", "Entregados: 0", "Leídos: 0"]
+            # No se concluye que hubo cero eventos: primero se inspeccionan los campos
+            # realmente rastreados para detectar si el módulo usa otro modelo/campo.
+            print("WhatsApp: el historial diario no incluye whatsapp.message." + status_field +
+                  "; revisar campos modificados listados arriba.", file=sys.stderr)
+            return unavailable
 
         relevant_tracking = [
             row for row in tracking_rows
