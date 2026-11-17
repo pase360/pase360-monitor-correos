@@ -531,7 +531,7 @@ def gmail_automated_mail_report(report_date, next_date):
         since = (report_date - timedelta(days=1)).strftime("%d-%b-%Y")
         before = (next_date + timedelta(days=1)).strftime("%d-%b-%Y")
 
-        status, _ = client.select("[Gmail]/Sent Mail", readonly=True)
+        status, _ = client.select("[Gmail]/Sent Mail")
         if status != "OK":
             raise RuntimeError("No se pudo abrir la carpeta Enviados de Gmail.")
         status, data = client.search(None, "SINCE", since, "BEFORE", before)
@@ -547,7 +547,7 @@ def gmail_automated_mail_report(report_date, next_date):
             if any(phrase in subject for phrase in phrases):
                 sent_uids.add(uid)
 
-        status, _ = client.select("INBOX", readonly=True)
+        status, _ = client.select("INBOX")
         if status != "OK":
             raise RuntimeError("No se pudo abrir la bandeja de entrada de Gmail.")
         status, data = client.search(None, "SINCE", since, "BEFORE", before)
