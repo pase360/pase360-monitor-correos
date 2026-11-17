@@ -159,44 +159,116 @@ def whatsapp_model_diagnostic(odoo):
               file=sys.stderr)
 
 def whatsapp_history_diagnostic(odoo):
-    """Inspecciona historial de estados sin mostrar datos personales ni contenido."""
+    """Comprueba si Odoo guarda transiciones fechadas de estado de WhatsApp."""
     print("WhatsApp: búsqueda de historial y fechas de eventos:", file=sys.stderr)
-    for model in ("mail.message", "mail.tracking.value", "mail.tracking.value.mixin"):
-        try:
-            meta = odoo.fields_get(model)
-            relevant = [
-                name for name in meta
-                if any(term in name.lower() for term in (
-                    "tracking", "field", "old", "new", "value", "date",
-                    "model", "res_id", "message", "subtype"
-                ))
-            ]
-            print(
-                f"WhatsApp: {model}: " + (", ".join(relevant[:50]) or "sin campos de historial"),
-                file=sys.stderr
-            )
-        except Exception as exc:
-            print(f"WhatsApp: {model}: no disponible ({type(exc).__name__}).", file=sys.stderr)
-
     try:
-        meta = odoo.fields_get("whatsapp.message")
-        fields = [
-            name for name in ("id", "state", "message_type", "create_date",
-                              "write_date", "msg_uid", "mail_message_id")
-            if name in meta
+        msg_meta = odoo.fields_get("mail.message")
+        track_meta = odoo.fields_get("mail.tracking.value")
+        wa_meta = odoo.fields_get("whatsapp.message")
+
+        wa_fields = [name for name in (
+            "id", "state", "message_type", "create_date", "write_date",
+            "mail_message_id"
+        ) if name in wa_meta]
+        wa_rows = odoo.search_read(
+            "whatsapp.message", [], wa_fields, limit=40, order="write_date desc"
+        )
+        message_ids = []
+        for row in wa_rows:
+            value = row.get("mail_message_id")
+            if isinstance(value, (list, tuple)) and value and isinstance(value[0], int):
+                message_ids.append(value[0])
+            elif isinstance(value, int):
+                message_ids.append(value)
+        message_ids = sorted(set(message_ids))
+
+        print(
+            f"WhatsApp: mensajes recientes revisados: {len(wa_rows)}; "
+            f"vínculos mail.message: {len(message_ids)}",
+            file=sys.stderr
+        )
+        if not message_ids or "tracking_value_ids" not in msg_meta:
+            print("WhatsApp: no hay vínculo de historial tracking_value_ids para revisar.",
+                  file=sys.stderr)
+            return
+
+        messages = odoo.search_read(
+            "mail.message", [["id", "in", message_ids]],
+            ["id", "tracking_value_ids"], limit=100
+        )
+        tracking_ids = sorted({
+            tracking_id
+            for message in messages
+            for tracking_id in (message.get("tracking_value_ids") or [])
+            if isinstance(tracking_id, int)
+        })
+        print(f"WhatsApp: registros de historial vinculados: {len(tracking_ids)}",
+              file=sys.stderr)
+        if not tracking_ids:
+            print("WhatsApp: Odoo no devolvió transiciones en tracking_value_ids.",
+                  file=sys.stderr)
+            return
+
+        tracking_fields = [
+            name for name in (
+                "id", "field_id", "old_value_char", "new_value_char",
+                "old_value_text", "new_value_text", "old_value_datetime",
+                "new_value_datetime", "create_date"
+            ) if name in track_meta
         ]
-        records = odoo.search_read(
-            "whatsapp.message", [], fields, limit=15, order="write_date desc"
+        values = odoo.search_read(
+            "mail.tracking.value", [["id", "in", tracking_ids]],
+            tracking_fields, limit=500, order="create_date desc"
+        )
+        field_ids = sorted({
+            value["field_id"][0]
+            for value in values
+            if isinstance(value.get("field_id"), (list, tuple))
+            and value["field_id"] and isinstance(value["field_id"][0], int)
+        })
+        field_names = {}
+        if field_ids:
+            try:
+                fields_meta = odoo.search_read(
+                    "ir.model.fields", [["id", "in", field_ids]],
+                    ["id", "name", "model"], limit=200
+                )
+                field_names = {
+                    row["id"]: (row.get("name") or "")
+                    for row in fields_meta
+                }
+            except Exception:
+                pass
+
+        state_changes = []
+        for value in values:
+            field_value = value.get("field_id")
+            field_id = field_value[0] if isinstance(field_value, (list, tuple)) and field_value else None
+            field_name = field_names.get(field_id, "")
+            if field_name not in ("state", "status"):
+                continue
+            state_changes.append({
+                "fecha": value.get("create_date"),
+                "campo": field_name,
+                "antes": value.get("old_value_char") or value.get("old_value_text"),
+                "despues": value.get("new_value_char") or value.get("new_value_text"),
+                "mensaje_historial_id": value.get("id"),
+            })
+        print(
+            "WhatsApp: transiciones de estado fechadas: " +
+            json.dumps(state_changes[:80], ensure_ascii=False, default=str),
+            file=sys.stderr
         )
         print(
-            "WhatsApp: muestra técnica (solo ID, estado y fechas): " +
-            json.dumps(records, ensure_ascii=False, default=str)[:3500],
+            "WhatsApp: campos tracking disponibles: " +
+            ", ".join(tracking_fields),
             file=sys.stderr
         )
     except Exception as exc:
-        print(f"WhatsApp: no se pudieron inspeccionar fechas ({type(exc).__name__}).",
-              file=sys.stderr)
-
+        print(
+            f"WhatsApp: no se pudo consultar historial ({type(exc).__name__}: {str(exc)[:250]}).",
+            file=sys.stderr
+        )
 
 def whatsapp_report(odoo, start_utc, end_utc):
     """Devuelve únicamente los tres estados solicitados de WhatsApp."""
