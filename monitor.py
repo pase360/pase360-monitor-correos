@@ -145,7 +145,6 @@ def whatsapp_report(odoo, start_utc, end_utc):
         lines = [
             "📱 PASE 360 | CONTROL DE WHATSAPP",
             f"Mensajes registrados ese día: {len(records)}",
-            f"Campo de estado leído en Odoo: {status_field}",
         ]
         if not records:
             lines.append("No se encontraron mensajes de ayer en whatsapp.message.")
@@ -164,7 +163,6 @@ def whatsapp_report(odoo, start_utc, end_utc):
             label = traducciones.get(str(key).lower(),
                      traducciones.get(str(original).lower(), str(original)))
             lines.append(f"{label}: {amount}")
-        lines.append("Estados obtenidos de los registros de Odoo; no se muestran teléfonos ni textos.")
         return lines
     except Exception as exc:
         return [
@@ -422,9 +420,8 @@ def email_open_report(start_utc, end_utc):
         with urllib.request.urlopen(req, timeout=20) as response:
             result = json.loads(response.read().decode())
         lines.append(f"• Solicitudes del píxel: {int(result.get('aperturas', 0))}")
-        lines.append(f"• Correos identificados con al menos una solicitud: {int(result.get('correos_identificados', 0))}")
-        lines.append("• Son aperturas aproximadas: filtros de privacidad y precargas automáticas pueden alterar el conteo.")
-        lines.append("• No demuestra lectura humana ni confirma entrega del correo.")
+        lines.append(f"• Correos abiertos (estimados): {int(result.get('correos_identificados', 0))}")
+        lines.append("• Estimación por solicitudes del píxel; no confirma lectura humana ni entrega.")
     except Exception as exc:
         lines.append(f"• No se pudo consultar el receptor de aperturas: {str(exc)[:350]}")
     return lines
@@ -473,43 +470,24 @@ def main():
 
     lines = [
         "📬 PASE 360 | CONTROL DIARIO",
-        f"Día informado: {report_date.strftime('%d/%m/%Y')}",
+        f"Día: {report_date.strftime('%d/%m/%Y')}",
         "",
-        "✉️ ESTADO DE LOS CORREOS",
-        f"Registros mail.mail de todos los asuntos (ayer): {len(all_mail_records)}",
-        f"Registros cuyo asunto contiene Pase 360: {len(mail_records)}",
-        f"Enviados por Odoo: {mail_counts['sent']}",
-        f"Pendientes de envío: {mail_counts['outgoing']}",
-        f"Con error de envío: {mail_counts['exception']}",
+        "✉️ CORREOS",
+        f"Enviados: {mail_counts['sent']}",
+        f"Pendientes: {mail_counts['outgoing']}",
+        f"Con error: {mail_counts['exception']}",
         f"Cancelados: {mail_counts['cancel']}",
-        f"Otros estados: {mail_counts['other']}",
-        "",
-        "Qué significa cada estado:",
-        "• Enviados por Odoo: Odoo completó el envío al servidor de correo; no confirma llegada a la bandeja.",
-        "• Pendientes: Odoo todavía los tiene en cola de envío.",
-        "• Con error: Odoo registró un problema al intentar enviarlos.",
-        "• Cancelados: el envío fue cancelado.",
-        "• Otros: estado distinto de los anteriores.",
-        "",
-        "El conteo Pase 360 se basa en registros mail.mail conservados y asuntos que contienen esa expresión.",
-        "Un cero no demuestra que no se hayan enviado correos: Odoo puede usar otro asunto o eliminar registros.",
-        "Este informe todavía no verifica rebotes en Gmail ni aperturas; tampoco confirma lectura humana.",
-        "",
+        f"Otros: {mail_counts['other']}",
     ]
+    if not mail_records:
+        lines.append("Sin registros de correo Pase 360 conservados en Odoo para ese día.")
     if failures:
-        lines += ["Errores de correo:", *failures, ""]
+        lines += ["", "⚠️ ERRORES DE ENVÍO:", *failures]
 
-    lines.extend(mail_message_diagnostic(odoo, start_utc, end_utc))
-    lines.extend(mail_notification_diagnostic(odoo, mail_records, start_utc, end_utc))
-    lines.extend(mail_server_diagnostic(odoo))
     lines.extend(email_open_report(start_utc, end_utc))
-    lines.extend(tracking_diagnostic(odoo))
     lines.append("")
     lines.extend(whatsapp_report(odoo, start_utc, end_utc))
-    lines += [
-        "",
-        "Informe de solo lectura. No se modificaron mensajes ni automatizaciones."
-    ]
+    lines += ["", "Control automático de solo lectura."]
     telegram("\n".join(lines))
 
 
