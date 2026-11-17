@@ -626,6 +626,11 @@ def main():
     ):
         print("\\n".join(diagnostic), file=sys.stderr)
 
+    # Diagnóstico temporal de campos y modelos de eventos de WhatsApp.
+    whatsapp_model_diagnostic(odoo)
+
+    for diagnostic in ():
+
     # Los enviados se cuentan en Odoo, como en la versión original.
     # Gmail se consulta únicamente para detectar avisos de rebote recibidos.
     enviados = sum(1 for rec in mail_records if rec.get("state") == "sent")
