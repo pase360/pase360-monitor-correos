@@ -106,79 +106,186 @@ def date_domain(start_utc, end_utc):
 
 
 def whatsapp_report(odoo, start_utc, end_utc):
-    """Devuelve únicamente los tres estados solicitados de WhatsApp."""
+    """Cuenta eventos diarios de WhatsApp usando el historial de tracking de Odoo."""
+    unavailable = ["Enviados: No disponible", "Entregados: No disponible", "Leídos: No disponible"]
     try:
-        meta = odoo.fields_get("whatsapp.message")
-        if not isinstance(meta, dict) or not meta:
-            return ["Enviados: No disponible", "Entregados: No disponible", "Leídos: No disponible"]
-        status_field = next((name for name in ("state", "status") if name in meta), None)
+        wa_meta = odoo.fields_get("whatsapp.message")
+        tracking_meta = odoo.fields_get("mail.tracking.value")
+        message_meta = odoo.fields_get("mail.message")
+        field_meta = odoo.fields_get("ir.model.fields")
+
+        if not all(isinstance(x, dict) and x for x in (wa_meta, tracking_meta, message_meta, field_meta)):
+            print("WhatsApp: no están disponibles todos los modelos necesarios para leer el historial.", file=sys.stderr)
+            return unavailable
+
+        status_field = next((name for name in ("state", "status", "estado") if name in wa_meta), None)
         if not status_field:
-            print("WhatsApp: no se encontró campo state/status. Campos disponibles: " +
-                  ", ".join(meta.keys()), file=sys.stderr)
-            return ["Enviados: No disponible", "Entregados: No disponible", "Leídos: No disponible"]
+            print("WhatsApp: no se encontró el campo de estado.", file=sys.stderr)
+            return unavailable
 
-        # Inspección segura de metadatos: identificar fechas de cada hito sin leer datos personales.
-        event_terms = ("date", "datetime", "sent", "deliver", "read", "send", "message_status", "state", "status")
-        event_fields = [
-            name for name in meta
-            if any(term in name.lower() for term in event_terms)
-        ]
-        selection = meta[status_field].get("selection") or []
+        wa_link_field = next((
+            name for name, info in message_meta.items()
+            if info.get("relation") == "whatsapp.message"
+        ), None)
+        tracking_message_field = next((
+            name for name, info in tracking_meta.items()
+            if info.get("relation") == "mail.message"
+        ), None)
+        tracking_field_field = next((
+            name for name, info in tracking_meta.items()
+            if info.get("relation") == "ir.model.fields"
+        ), None)
+
         print("WhatsApp: campo de estado=" + status_field, file=sys.stderr)
-        print("WhatsApp: campos candidatos para fechas/estados=" +
-              ", ".join(event_fields), file=sys.stderr)
-        print("WhatsApp: valores de estado=" +
-              "; ".join(f"{key}={label}" for key, label in selection), file=sys.stderr)
-        print("WhatsApp: todos los campos del modelo=" + ", ".join(meta.keys()), file=sys.stderr)
+        print("WhatsApp: vínculo mail.message → WhatsApp=" + str(wa_link_field), file=sys.stderr)
+        print("WhatsApp: vínculo tracking → mail.message=" + str(tracking_message_field), file=sys.stderr)
+        print("WhatsApp: vínculo tracking → campo=" + str(tracking_field_field), file=sys.stderr)
 
-        # Verificar si Odoo registra cambios de estado en el historial del chatter.
-        for model_name in ("mail.tracking.value", "mail.message"):
-            try:
-                tracking_meta = odoo.fields_get(model_name)
-                if isinstance(tracking_meta, dict):
-                    relevant = [
-                        name for name in tracking_meta
-                        if any(term in name.lower() for term in (
-                            "track", "message", "field", "old_value", "new_value",
-                            "model", "res_id", "date", "whatsapp"
-                        ))
-                    ]
-                    print(f"Historial Odoo {model_name}: " + ", ".join(relevant), file=sys.stderr)
-            except Exception as tracking_exc:
-                print(f"Historial Odoo {model_name}: no accesible ({type(tracking_exc).__name__})", file=sys.stderr)
+        if not all((wa_link_field, tracking_message_field, tracking_field_field)):
+            print("WhatsApp: faltan relaciones técnicas para enlazar el historial.", file=sys.stderr)
+            return unavailable
+        if "create_date" not in tracking_meta:
+            print("WhatsApp: mail.tracking.value no expone create_date.", file=sys.stderr)
+            return unavailable
 
-        fields = ["id", status_field] + [
-            name for name in event_fields
-            if name != status_field and meta[name].get("type") in ("date", "datetime", "selection", "boolean")
+        track_fields = ["id", "create_date", tracking_message_field, tracking_field_field]
+        for name in (
+            "old_value_char", "new_value_char", "old_value_text", "new_value_text",
+            "old_value_integer", "new_value_integer", "old_value_float", "new_value_float",
+            "old_value_datetime", "new_value_datetime"
+        ):
+            if name in tracking_meta:
+                track_fields.append(name)
+
+        tracking_rows = odoo.search_read(
+            "mail.tracking.value",
+            [["create_date", ">=", start_utc], ["create_date", "<", end_utc]],
+            track_fields, limit=5000
+        )
+        print(f"WhatsApp: cambios de tracking creados en el día={len(tracking_rows)}", file=sys.stderr)
+
+        def relation_id(value):
+            if isinstance(value, int):
+                return value
+            if isinstance(value, (list, tuple)) and value and isinstance(value[0], int):
+                return value[0]
+            return None
+
+        field_ids = sorted({
+            relation_id(row.get(tracking_field_field))
+            for row in tracking_rows
+            if relation_id(row.get(tracking_field_field)) is not None
+        })
+        if not field_ids:
+            print("WhatsApp: el historial del día no contiene campos rastreados.", file=sys.stderr)
+            return ["Enviados: 0", "Entregados: 0", "Leídos: 0"]
+
+        field_rows = odoo.search_read(
+            "ir.model.fields", [["id", "in", field_ids]],
+            ["id", "model", "name"], limit=5000
+        )
+        state_field_ids = {
+            row["id"] for row in field_rows
+            if row.get("model") == "whatsapp.message" and row.get("name") == status_field
+        }
+        if not state_field_ids:
+            print("WhatsApp: no se encontraron cambios del campo de estado en el historial diario.", file=sys.stderr)
+            # Si el modelo y las relaciones se consultaron correctamente, cero cambios es un resultado válido.
+            return ["Enviados: 0", "Entregados: 0", "Leídos: 0"]
+
+        relevant_tracking = [
+            row for row in tracking_rows
+            if relation_id(row.get(tracking_field_field)) in state_field_ids
+            and relation_id(row.get(tracking_message_field)) is not None
         ]
-        domain = date_domain(start_utc, end_utc) if "create_date" in meta else []
-        records = odoo.search_read("whatsapp.message", domain, fields, limit=2000)
-        print(f"WhatsApp: registros consultados en ventana de creación={len(records)}", file=sys.stderr)
-        labels = {str(key): str(label).strip().lower() for key, label in selection}
+        mail_message_ids = sorted({
+            relation_id(row.get(tracking_message_field)) for row in relevant_tracking
+        })
+        linked_messages = odoo.search_read(
+            "mail.message", [["id", "in", mail_message_ids]],
+            ["id", wa_link_field], limit=5000
+        ) if mail_message_ids else []
+
+        whatsapp_ids = set()
+        for message in linked_messages:
+            links = message.get(wa_link_field) or []
+            if isinstance(links, list):
+                for item in links:
+                    if isinstance(item, int):
+                        whatsapp_ids.add(item)
+                    elif isinstance(item, (list, tuple)) and item and isinstance(item[0], int):
+                        whatsapp_ids.add(item[0])
+
+        if not whatsapp_ids:
+            print("WhatsApp: el historial del día no se pudo vincular a mensajes WhatsApp.", file=sys.stderr)
+            return unavailable
+
+        wa_records = odoo.search_read(
+            "whatsapp.message", [["id", "in", sorted(whatsapp_ids)]],
+            ["id", status_field], limit=5000
+        )
+        valid_wa_ids = {row["id"] for row in wa_records}
+        print(f"WhatsApp: mensajes vinculados al historial={len(valid_wa_ids)}", file=sys.stderr)
+
+        selection = wa_meta[status_field].get("selection") or []
+        status_labels = {}
+        for key, label in selection:
+            status_labels[str(key).strip().lower()] = str(label).strip().lower()
+
+        def normalized(value):
+            return str(value or "").strip().casefold()
+
         counts = Counter()
-        for row in records:
-            key = str(row.get(status_field) or "").strip().lower()
-            value = key + " " + labels.get(key, "")
-            # Conteo acumulado por recorrido: leído también cuenta como entregado y enviado;
-            # entregado también cuenta como enviado.
-            if any(x in value for x in ("read", "leíd", "leido")):
-                counts["sent"] += 1
-                counts["delivered"] += 1
+        matched_events = 0
+        for row in relevant_tracking:
+            message_id = relation_id(row.get(tracking_message_field))
+            linked = next((m for m in linked_messages if m.get("id") == message_id), None)
+            if not linked:
+                continue
+            links = linked.get(wa_link_field) or []
+            ids = set()
+            if isinstance(links, list):
+                for item in links:
+                    if isinstance(item, int):
+                        ids.add(item)
+                    elif isinstance(item, (list, tuple)) and item and isinstance(item[0], int):
+                        ids.add(item[0])
+            if not (ids & valid_wa_ids):
+                continue
+
+            new_values = [
+                row.get(name) for name in (
+                    "new_value_char", "new_value_text", "new_value_integer",
+                    "new_value_float", "new_value_datetime"
+                ) if name in row and row.get(name) not in (None, False, "")
+            ]
+            if not new_values:
+                continue
+            raw = " ".join(normalized(value) for value in new_values)
+            # Reconoce tanto las claves técnicas como las etiquetas traducidas de Odoo.
+            sent_terms = ("sent", "envi", "send")
+            delivered_terms = ("delivered", "entreg")
+            read_terms = ("read", "leíd", "leido", "leer")
+            if any(term in raw for term in read_terms):
                 counts["read"] += 1
-            elif any(x in value for x in ("deliver", "entreg")):
-                counts["sent"] += 1
+            elif any(term in raw for term in delivered_terms):
                 counts["delivered"] += 1
-            elif any(x in value for x in ("sent", "enviado", "send", "accepted", "aceptado")):
+            elif any(term in raw for term in sent_terms):
                 counts["sent"] += 1
+            else:
+                continue
+            matched_events += 1
+
+        print(f"WhatsApp: cambios de estado identificados y vinculados={matched_events}", file=sys.stderr)
+        print("WhatsApp: conteo basado en create_date del historial, no en write_date del mensaje.", file=sys.stderr)
         return [
             f"Enviados: {counts['sent']}",
             f"Entregados: {counts['delivered']}",
             f"Leídos: {counts['read']}",
         ]
-    except Exception:
-        return ["Enviados: No disponible", "Entregados: No disponible", "Leídos: No disponible"]
-
-
+    except Exception as exc:
+        print(f"WhatsApp: error consultando historial ({type(exc).__name__}: {str(exc)[:350]}).", file=sys.stderr)
+        return unavailable
 
 def mail_message_diagnostic(odoo, start_utc, end_utc):
     """Cuenta mensajes del chatter sin leer ni mostrar asunto, direcciones o cuerpo."""
