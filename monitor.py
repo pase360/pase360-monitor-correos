@@ -129,6 +129,23 @@ def whatsapp_report(odoo, start_utc, end_utc):
               ", ".join(event_fields), file=sys.stderr)
         print("WhatsApp: valores de estado=" +
               "; ".join(f"{key}={label}" for key, label in selection), file=sys.stderr)
+        print("WhatsApp: todos los campos del modelo=" + ", ".join(meta.keys()), file=sys.stderr)
+
+        # Verificar si Odoo registra cambios de estado en el historial del chatter.
+        for model_name in ("mail.tracking.value", "mail.message"):
+            try:
+                tracking_meta = odoo.fields_get(model_name)
+                if isinstance(tracking_meta, dict):
+                    relevant = [
+                        name for name in tracking_meta
+                        if any(term in name.lower() for term in (
+                            "track", "message", "field", "old_value", "new_value",
+                            "model", "res_id", "date", "whatsapp"
+                        ))
+                    ]
+                    print(f"Historial Odoo {model_name}: " + ", ".join(relevant), file=sys.stderr)
+            except Exception as tracking_exc:
+                print(f"Historial Odoo {model_name}: no accesible ({type(tracking_exc).__name__})", file=sys.stderr)
 
         fields = ["id", status_field] + [
             name for name in event_fields
