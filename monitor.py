@@ -123,9 +123,14 @@ def whatsapp_report(odoo, start_utc, end_utc):
         for row in records:
             key = str(row.get(status_field) or "").strip().lower()
             value = key + " " + labels.get(key, "")
+            # Conteo acumulado por recorrido: leído también cuenta como entregado y enviado;
+            # entregado también cuenta como enviado.
             if any(x in value for x in ("read", "leíd", "leido")):
+                counts["sent"] += 1
+                counts["delivered"] += 1
                 counts["read"] += 1
             elif any(x in value for x in ("deliver", "entreg")):
+                counts["sent"] += 1
                 counts["delivered"] += 1
             elif any(x in value for x in ("sent", "enviado", "send", "accepted", "aceptado")):
                 counts["sent"] += 1
@@ -370,6 +375,7 @@ def email_open_report(start_utc, end_utc):
     """Devuelve el total de correos identificados por el píxel."""
     secret = os.getenv("REPORT_SECRET", "").strip()
     if not secret:
+        print("Aperturas: falta configurar REPORT_SECRET en GitHub Actions.", file=sys.stderr)
         return "Abiertos: No disponible"
     params = urllib.parse.urlencode({"from": start_utc, "to": end_utc})
     url = "https://pase360-registro-aperturas.infopase360.workers.dev/stats?" + params
@@ -378,7 +384,14 @@ def email_open_report(start_utc, end_utc):
         with urllib.request.urlopen(req, timeout=20) as response:
             result = json.loads(response.read().decode())
         return f"Abiertos: {int(result.get('correos_identificados', 0))}"
-    except Exception:
+    except urllib.error.HTTPError as exc:
+        print(f"Aperturas: el Worker respondió HTTP {exc.code}.", file=sys.stderr)
+        return "Abiertos: No disponible"
+    except urllib.error.URLError as exc:
+        print(f"Aperturas: no se pudo conectar con el Worker ({exc.reason}).", file=sys.stderr)
+        return "Abiertos: No disponible"
+    except Exception as exc:
+        print(f"Aperturas: respuesta inválida del Worker ({type(exc).__name__}).", file=sys.stderr)
         return "Abiertos: No disponible"
 
 
