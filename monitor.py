@@ -106,70 +106,37 @@ def date_domain(start_utc, end_utc):
 
 
 def whatsapp_report(odoo, start_utc, end_utc):
-    """Descubre el campo de estado real y resume WhatsApp sin exponer destinatarios."""
+    """Devuelve únicamente los tres estados solicitados de WhatsApp."""
     try:
         meta = odoo.fields_get("whatsapp.message")
         if not isinstance(meta, dict) or not meta:
-            return [
-                "WhatsApp: Odoo no devolvió los campos del modelo whatsapp.message.",
-                "Se necesita revisar el modelo o los permisos de lectura."
-            ]
-
-        status_field = next(
-            (name for name in ("state", "status") if name in meta),
-            None
-        )
-        date_field = "create_date" if "create_date" in meta else None
+            return ["Enviados: No disponible", "Entregados: No disponible", "Leídos: No disponible"]
+        status_field = next((name for name in ("state", "status") if name in meta), None)
         if not status_field:
-            return [
-                "WhatsApp: se encontró el modelo, pero no el campo de estado esperado.",
-                "Campos técnicos de estado disponibles: "
-                + ", ".join(
-                    name for name, info in meta.items()
-                    if any(word in name.lower() for word in ("state", "status"))
-                )
-            ]
-
-        selected_fields = ["id", status_field]
-        if date_field:
-            selected_fields.append(date_field)
-        domain = date_domain(start_utc, end_utc) if date_field else []
-        records = odoo.search_read(
-            "whatsapp.message", domain, selected_fields, limit=1000
-        )
-
+            return ["Enviados: No disponible", "Entregados: No disponible", "Leídos: No disponible"]
+        fields = ["id", status_field]
+        domain = date_domain(start_utc, end_utc) if "create_date" in meta else []
+        records = odoo.search_read("whatsapp.message", domain, fields, limit=2000)
         selection = meta[status_field].get("selection") or []
-        labels = {str(key): str(label) for key, label in selection}
-        counts = Counter(str(row.get(status_field) or "sin_estado") for row in records)
-
-        lines = [
-            "📱 PASE 360 | CONTROL DE WHATSAPP",
-            f"Mensajes registrados ese día: {len(records)}",
-        ]
-        if not records:
-            lines.append("No se encontraron mensajes de ayer en whatsapp.message.")
-        traducciones = {
-            "delivered": "Entregado",
-            "failed": "Fallido",
-            "read": "Leído",
-            "received": "Recibido",
-            "sent": "Enviado",
-            "pending": "Pendiente",
-            "accepted": "Aceptado",
-            "queued": "En cola",
-        }
-        for key, amount in sorted(counts.items()):
-            original = labels.get(key, key)
-            label = traducciones.get(str(key).lower(),
-                     traducciones.get(str(original).lower(), str(original)))
-            lines.append(f"{label}: {amount}")
-        return lines
-    except Exception as exc:
+        labels = {str(key): str(label).strip().lower() for key, label in selection}
+        counts = Counter()
+        for row in records:
+            key = str(row.get(status_field) or "").strip().lower()
+            value = key + " " + labels.get(key, "")
+            if any(x in value for x in ("read", "leíd", "leido")):
+                counts["read"] += 1
+            elif any(x in value for x in ("deliver", "entreg")):
+                counts["delivered"] += 1
+            elif any(x in value for x in ("sent", "enviado", "send", "accepted", "aceptado")):
+                counts["sent"] += 1
         return [
-            "📱 PASE 360 | CONTROL DE WHATSAPP",
-            "No se pudo consultar whatsapp.message.",
-            f"Diagnóstico: {str(exc)[:700]}"
+            f"Enviados: {counts['sent']}",
+            f"Entregados: {counts['delivered']}",
+            f"Leídos: {counts['read']}",
         ]
+    except Exception:
+        return ["Enviados: No disponible", "Entregados: No disponible", "Leídos: No disponible"]
+
 
 
 def mail_message_diagnostic(odoo, start_utc, end_utc):
@@ -400,31 +367,20 @@ def tracking_diagnostic(odoo):
 
 
 def email_open_report(start_utc, end_utc):
-    """Consulta aperturas aproximadas registradas por el receptor Cloudflare."""
-    lines = ["", "👁️ APERTURAS DE CORREO (SEGUIMIENTO POR PIXEL)"]
+    """Devuelve el total de correos identificados por el píxel."""
     secret = os.getenv("REPORT_SECRET", "").strip()
     if not secret:
-        return lines + ["• No está configurado REPORT_SECRET; no se consultaron aperturas."]
-
+        return "Abiertos: No disponible"
     params = urllib.parse.urlencode({"from": start_utc, "to": end_utc})
     url = "https://pase360-registro-aperturas.infopase360.workers.dev/stats?" + params
-    req = urllib.request.Request(
-        url,
-        headers={
-            "Authorization": f"Bearer {secret}",
-            "User-Agent": "Pase360-Mail-Monitor/1.0",
-        },
-        method="GET",
-    )
+    req = urllib.request.Request(url, headers={"Authorization": f"Bearer {secret}"}, method="GET")
     try:
         with urllib.request.urlopen(req, timeout=20) as response:
             result = json.loads(response.read().decode())
-        lines.append(f"• Solicitudes del píxel: {int(result.get('aperturas', 0))}")
-        lines.append(f"• Correos abiertos (estimados): {int(result.get('correos_identificados', 0))}")
-        lines.append("• Estimación por solicitudes del píxel; no confirma lectura humana ni entrega.")
-    except Exception as exc:
-        lines.append(f"• No se pudo consultar el receptor de aperturas: {str(exc)[:350]}")
-    return lines
+        return f"Abiertos: {int(result.get('correos_identificados', 0))}"
+    except Exception:
+        return "Abiertos: No disponible"
+
 
 
 def main():
@@ -446,11 +402,16 @@ def main():
             ["id", "subject", "state", "failure_reason", "create_date", "mail_message_id"],
             limit=1000
         )
-        # Luego identifica únicamente los que parecen corresponder a Pase 360.
-        # Se filtra localmente para poder comparar ambos totales.
+        # Reconoce las cuatro plantillas por sus frases distintivas, no por la marca.
+        frases_plantillas = (
+            "invitación para adherir",
+            "multiplica tus ventas con la comunidad de beneficios de pase 360",
+            "crea credenciales qr de beneficios para los miembros de tu organización",
+            "no dejes pasar la oportunidad de pertenecer a la red de beneficios pase 360",
+        )
         mail_records = [
             rec for rec in all_mail_records
-            if "pase 360" in str(rec.get("subject") or "").lower()
+            if any(frase in str(rec.get("subject") or "").casefold() for frase in frases_plantillas)
         ]
     except Exception as exc:
         raise RuntimeError(
@@ -458,39 +419,25 @@ def main():
             "o no estar disponible algún campo. Detalle: " + str(exc)
         ) from exc
 
-    mail_counts = {
-        "outgoing": 0, "sent": 0, "exception": 0, "cancel": 0, "other": 0
-    }
-    failures = []
-    for rec in mail_records:
-        state = rec.get("state") or "other"
-        mail_counts[state if state in mail_counts else "other"] += 1
-        if state == "exception" and len(failures) < 5:
-            failures.append(
-                f"- {(rec.get('failure_reason') or 'sin detalle')[:180]}"
-            )
+    mail_counts = Counter(str(rec.get("state") or "") for rec in mail_records)
+    enviados = mail_counts.get("sent", 0)
+    rechazados = mail_counts.get("exception", 0)
 
     lines = [
-        "📬 PASE 360 | CONTROL DIARIO",
+        "PASE 360 | CONTROL DIARIO",
         f"Día: {report_date.strftime('%d/%m/%Y')}",
         "",
-        "✉️ CORREOS",
-        f"Enviados: {mail_counts['sent']}",
-        f"Pendientes: {mail_counts['outgoing']}",
-        f"Con error: {mail_counts['exception']}",
-        f"Cancelados: {mail_counts['cancel']}",
-        f"Otros: {mail_counts['other']}",
+        "CORREOS ELECTRÓNICOS",
+        f"Enviados: {enviados}",
+        "Entregados: No disponible",
+        email_open_report(start_utc, end_utc),
+        f"Rechazados: {rechazados}",
+        "Enviados a spam: No disponible",
+        "",
+        "WHATSAPP",
+        *whatsapp_report(odoo, start_utc, end_utc),
     ]
-    if not mail_records:
-        lines.append("Sin registros de correo Pase 360 conservados en Odoo para ese día.")
-    if failures:
-        lines += ["", "⚠️ ERRORES DE ENVÍO:", *failures]
-
-    lines.extend(email_open_report(start_utc, end_utc))
-    lines.append("")
-    lines.extend(whatsapp_report(odoo, start_utc, end_utc))
-    lines += ["", "Control automático de solo lectura."]
-    telegram("\n".join(lines))
+    telegram("\\n".join(lines))
 
 
 if __name__ == "__main__":
