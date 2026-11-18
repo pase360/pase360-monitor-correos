@@ -320,82 +320,155 @@ def whatsapp_history_diagnostic(odoo):
         )
 
 def whatsapp_report(odoo, start_utc, end_utc):
-    """Cuenta envíos por create_date y lecturas/entregas registradas por write_date."""
+    """Separa invitaciones y conversaciones usando el subtipo de mail.message."""
     unavailable = [
-        "Enviados: No disponible",
-        "Entregados: No disponible",
-        "Leídos: No disponible",
+        "INVITACIONES",
+        "• Invitaciones enviadas: No disponible",
+        "",
+        "CONVERSACIONES",
+        "• Números con actividad: No disponible",
+        "• Mensajes recibidos: No disponible",
+        "• Mensajes enviados por Pase 360: No disponible",
     ]
     try:
-        meta = odoo.fields_get("whatsapp.message")
-        if not isinstance(meta, dict) or not meta or "state" not in meta:
+        wa_meta = odoo.fields_get("whatsapp.message")
+        mail_meta = odoo.fields_get("mail.message")
+        if not isinstance(wa_meta, dict) or not isinstance(mail_meta, dict):
             return unavailable
-        if "create_date" not in meta or "write_date" not in meta:
+        required_wa = ("id", "state", "create_date", "mobile_number", "mail_message_id")
+        if any(name not in wa_meta for name in required_wa):
+            missing = [name for name in required_wa if name not in wa_meta]
+            print("WhatsApp: faltan campos requeridos: " + ", ".join(missing), file=sys.stderr)
+            return unavailable
+        if "subtype_id" not in mail_meta:
+            print("WhatsApp: mail.message no expone subtype_id.", file=sys.stderr)
             return unavailable
 
-        fields = ["id", "state", "create_date", "write_date"]
-        if "message_type" in meta:
-            fields.append("message_type")
-
-        # Enviados: mensajes salientes creados durante el día informado.
-        sent_records = odoo.search_read(
+        wa_rows = odoo.search_read(
             "whatsapp.message",
             date_domain(start_utc, end_utc),
-            fields,
-            limit=3000,
+            list(required_wa),
+            limit=5000,
         )
 
-        # Lecturas y entregas: mensajes cuyo último cambio se registró ese día,
-        # aunque hayan sido enviados en días anteriores.
-        changed_records = odoo.search_read(
-            "whatsapp.message",
-            [
-                ["write_date", ">=", start_utc],
-                ["write_date", "<", end_utc],
-            ],
-            fields,
-            limit=3000,
+        def relation_id(value):
+            if isinstance(value, (list, tuple)) and value and isinstance(value[0], int):
+                return value[0]
+            if isinstance(value, int):
+                return value
+            return None
+
+        def relation_label(value):
+            if isinstance(value, (list, tuple)) and len(value) > 1:
+                return str(value[1] or "").strip().casefold()
+            return ""
+
+        mail_ids = sorted({
+            relation_id(row.get("mail_message_id"))
+            for row in wa_rows
+            if relation_id(row.get("mail_message_id")) is not None
+        })
+        if not mail_ids:
+            return [
+                "INVITACIONES",
+                "• Invitaciones enviadas: 0",
+                "",
+                "CONVERSACIONES",
+                "• Números con actividad: 0",
+                "• Mensajes recibidos: 0",
+                "• Mensajes enviados por Pase 360: 0",
+            ]
+
+        mail_rows = odoo.search_read(
+            "mail.message",
+            [["id", "in", mail_ids]],
+            ["id", "subtype_id"],
+            limit=6000,
         )
+        subtype_by_mail_id = {
+            row.get("id"): relation_label(row.get("subtype_id"))
+            for row in mail_rows
+        }
 
-        def is_outbound(row):
-            if "message_type" not in fields:
-                return True
-            kind = str(row.get("message_type") or "").strip().lower()
-            return kind in ("outbound", "outgoing")
+        # En Odoo en español los subtipos observados son "Nota" y "Conversaciones".
+        # Se aceptan también los nombres ingleses para instalaciones con otro idioma.
+        note_names = {"nota", "note"}
+        conversation_names = {"conversaciones", "conversation", "discussions", "discussion"}
+        successful_outbound_states = {
+            "envied", "delivered", "read", "sent", "done", "success"
+        }
 
-        sent_ids = set()
-        for row in sent_records:
-            if not is_outbound(row):
+        invitations = 0
+        by_number = {}
+        unclassified = 0
+
+        for row in wa_rows:
+            subtype = subtype_by_mail_id.get(row.get("mail_message_id") and relation_id(row.get("mail_message_id")), "")
+            state = str(row.get("state") or "").strip().casefold()
+            number = str(row.get("mobile_number") or "").strip() or "Número no informado"
+
+            if subtype in note_names:
+                if state in successful_outbound_states:
+                    invitations += 1
                 continue
-            state = str(row.get("state") or "").strip().lower()
-            if state in ("envied", "delivered", "read"):
-                sent_ids.add(row.get("id"))
 
-        delivered = 0
-        read = 0
-        for row in changed_records:
-            if not is_outbound(row):
+            if subtype not in conversation_names:
+                unclassified += 1
                 continue
-            state = str(row.get("state") or "").strip().lower()
-            if state == "read":
-                read += 1
-                delivered += 1
-            elif state == "delivered":
-                delivered += 1
 
-        return [
-            f"Enviados: {len(sent_ids)}",
-            f"Entregados: {delivered}",
-            f"Leídos: {read}",
+            stats = by_number.setdefault(number, {"received": 0, "sent": 0})
+            if state == "received":
+                stats["received"] += 1
+            elif state in successful_outbound_states:
+                stats["sent"] += 1
+
+        active = {
+            number: stats for number, stats in by_number.items()
+            if stats["received"] or stats["sent"]
+        }
+        received_total = sum(stats["received"] for stats in active.values())
+        sent_total = sum(stats["sent"] for stats in active.values())
+
+        lines = [
+            "INVITACIONES",
+            f"• Invitaciones enviadas: {invitations}",
+            "",
+            "CONVERSACIONES",
+            f"• Números con actividad: {len(active)}",
+            f"• Mensajes recibidos: {received_total}",
+            f"• Mensajes enviados por Pase 360: {sent_total}",
         ]
+
+        if active:
+            lines.extend(["", "DETALLE POR NÚMERO"])
+            ordered = sorted(
+                active.items(),
+                key=lambda item: (-(item[1]["received"] + item[1]["sent"]), item[0])
+            )
+            max_details = 30
+            for number, stats in ordered[:max_details]:
+                total = stats["received"] + stats["sent"]
+                lines.append(
+                    f"• {number} — Recibidos: {stats['received']} | "
+                    f"Enviados: {stats['sent']} | Total: {total}"
+                )
+            if len(ordered) > max_details:
+                lines.append(f"• Otros números omitidos: {len(ordered) - max_details}")
+
+        if unclassified:
+            print(
+                f"WhatsApp: {unclassified} mensajes no se clasificaron por subtipo; "
+                "no se sumaron a invitaciones ni conversaciones.",
+                file=sys.stderr,
+            )
+        return lines
     except Exception as exc:
         print(
-            f"WhatsApp: no se pudo consultar whatsapp.message "
+            f"WhatsApp: no se pudo generar el informe por subtipo "
             f"({type(exc).__name__}: {str(exc)[:250]}).",
             file=sys.stderr,
         )
         return unavailable
-
 
 def mail_message_diagnostic(odoo, start_utc, end_utc):
     """Cuenta mensajes del chatter sin leer ni mostrar asunto, direcciones o cuerpo."""
